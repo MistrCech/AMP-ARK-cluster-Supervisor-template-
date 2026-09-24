@@ -24,8 +24,8 @@ mezi nimi postupně rozejde.
 V AMP přidej repozitář (Configuration → Instance Deployment):
 
 ```
-cechacek/AMP-ARK-cluster-Supervisor-template-:main      produkce
-cechacek/AMP-ARK-cluster-Supervisor-template-:staging   testovani
+MistrCech/AMP-ARK-cluster-Supervisor-template-:main      produkce
+MistrCech/AMP-ARK-cluster-Supervisor-template-:staging   testovani
 ```
 
 Na hostiteli musí být **systémový Python** verze zadané v nastavení instance

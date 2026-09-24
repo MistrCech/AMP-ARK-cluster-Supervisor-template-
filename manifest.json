@@ -1,8 +1,8 @@
 {
     "id": "fd7109ec-bda5-40fb-9ec7-96c66f556ada",
-    "authors": ["cechacek"],
-    "origin": "https://github.com/cechacek/AMP-ARK-cluster-Supervisor-template-.git",
-    "url": "https://github.com/cechacek/AMP-ARK-cluster-Supervisor-template-",
+    "authors": ["MistrCech"],
+    "origin": "https://github.com/MistrCech/AMP-ARK-cluster-Supervisor-template-.git",
+    "url": "https://github.com/MistrCech/AMP-ARK-cluster-Supervisor-template-",
     "imagefile": "",
     "prefix": "",
     "repotype": "AppTemplates"

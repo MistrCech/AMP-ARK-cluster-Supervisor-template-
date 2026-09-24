@@ -489,7 +489,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "DownloadSource",
         "IncludeInCommandLine": false,
-        "DefaultValue": "https://github.com/cechacek/AMP-ARK-cluster-Supervisor-template-.git",
+        "DefaultValue": "https://github.com/MistrCech/AMP-ARK-cluster-Supervisor-template-.git",
         "EnumValues": {}
     },
     {
