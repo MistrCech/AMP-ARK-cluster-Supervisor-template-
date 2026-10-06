@@ -1631,12 +1631,14 @@ class Supervisor:
 # --------------------------------------------------------------------------
 
 def main():
-    # UTF-8 nezavisle na systemu: na Windows by Python u roury vzal kodovou
-    # stranku (cp1250/cp1252) a jmena hracu i prikazy s diakritikou by se
-    # rozbily; znak mimo stranku by shodil vypis i vlakno, ktere ho psalo.
-    # stdin s -sig: kdyby AMP poslal na zacatek BOM, prvni prikaz by neprosel.
+    # Vystup v UTF-8 nezavisle na systemu - AMP ho tak cte (overeno 2.8, Windows);
+    # znak mimo kodovou stranku by jinak shodil vypis i vlakno, ktere ho psalo.
+    # Vstup ale AMP na Windows posila v OEM strance s priblizenim ("Rehor
+    # zkous\xa1" z "Rehor zkousi" s hacky a carkami, cp437) - cesky znak se ztrati
+    # uz v AMP, "oem" zachrani aspon ty, co v ni jsou. Linux: UTF-8, -sig pro
+    # pripadny BOM pred prvnim prikazem.
     for stream, encoding in ((sys.stdout, "utf-8"), (sys.stderr, "utf-8"),
-                             (sys.stdin, "utf-8-sig")):
+                             (sys.stdin, "oem" if IS_WINDOWS else "utf-8-sig")):
         try:
             stream.reconfigure(encoding=encoding, errors="replace")
         except (AttributeError, ValueError):
