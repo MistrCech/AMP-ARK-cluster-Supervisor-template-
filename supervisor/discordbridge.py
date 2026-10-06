@@ -174,7 +174,10 @@ class DiscordBridge:
                 # Vadny pozadavek (napr. prilis dlouha zprava) - opakovat nema smysl.
                 self._fail(what, f"Discord odmitl pozadavek ({exc})")
                 return None
-        self._fail(what, f"Discord nedostupny ({exc}), zkousim dal")
+        # Ojedinely timeout se stava (overeno) a most ho do 10 s prekona -
+        # hlasit az opakovany.
+        if attempt >= 2:
+            self._fail(what, f"Discord nedostupny ({exc}), zkousim dal")
         return min(5.0 * 2 ** attempt, 120.0)
 
     def _fail(self, what, message):
