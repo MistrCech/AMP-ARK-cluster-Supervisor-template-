@@ -10,7 +10,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapIsland",
         "IncludeInCommandLine": false,
-        "DefaultValue": "True",
+        "DefaultValue": "TheIsland_WP ",
         "EnumValues": {
             "False": "",
             "True": "TheIsland_WP "
@@ -27,7 +27,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapScorched",
         "IncludeInCommandLine": false,
-        "DefaultValue": "True",
+        "DefaultValue": "ScorchedEarth_WP ",
         "EnumValues": {
             "False": "",
             "True": "ScorchedEarth_WP "
@@ -44,7 +44,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapCenter",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "TheCenter_WP "
@@ -61,7 +61,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapAberration",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Aberration_WP "
@@ -78,7 +78,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapExtinction",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Extinction_WP "
@@ -95,7 +95,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapAstraeos",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Astraeos_WP "
@@ -112,7 +112,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapRagnarok",
         "IncludeInCommandLine": false,
-        "DefaultValue": "True",
+        "DefaultValue": "Ragnarok_WP ",
         "EnumValues": {
             "False": "",
             "True": "Ragnarok_WP "
@@ -129,7 +129,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapValguero",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Valguero_WP "
@@ -146,7 +146,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapLostColony",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "LostColony_WP "
@@ -163,7 +163,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapGenesis",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Genesis_WP "
@@ -283,7 +283,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "CrossChat",
         "IncludeInCommandLine": false,
-        "DefaultValue": "True",
+        "DefaultValue": "1",
         "EnumValues": {
             "False": "",
             "True": "1"
@@ -372,7 +372,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "CpuPinning",
         "IncludeInCommandLine": false,
-        "DefaultValue": "True",
+        "DefaultValue": "1",
         "EnumValues": {
             "False": "",
             "True": "1"
@@ -389,7 +389,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "AutoRestart",
         "IncludeInCommandLine": false,
-        "DefaultValue": "True",
+        "DefaultValue": "1",
         "EnumValues": {
             "False": "",
             "True": "1"
@@ -406,7 +406,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "HiveCleanup",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "1"

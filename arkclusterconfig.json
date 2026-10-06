@@ -10,7 +10,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapIsland",
         "IncludeInCommandLine": false,
-        "DefaultValue": "True",
+        "DefaultValue": "TheIsland ",
         "EnumValues": {
             "False": "",
             "True": "TheIsland "
@@ -27,7 +27,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapCenter",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "TheCenter "
@@ -44,7 +44,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapScorched",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "ScorchedEarth_P "
@@ -61,7 +61,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapRagnarok",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Ragnarok "
@@ -78,7 +78,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapAberration",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Aberration_P "
@@ -95,7 +95,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapExtinction",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Extinction "
@@ -112,7 +112,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapValguero",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Valguero_P "
@@ -129,7 +129,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapGenesis",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Genesis "
@@ -146,7 +146,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapCrystalIsles",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "CrystalIsles "
@@ -163,7 +163,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapGen2",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Gen2 "
@@ -180,7 +180,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapLostIsland",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "LostIsland "
@@ -197,7 +197,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapFjordur",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Fjordur "
@@ -214,7 +214,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "MapAquatica",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "Aquatica "
@@ -334,7 +334,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "CrossChat",
         "IncludeInCommandLine": false,
-        "DefaultValue": "True",
+        "DefaultValue": "1",
         "EnumValues": {
             "False": "",
             "True": "1"
@@ -423,7 +423,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "CpuPinning",
         "IncludeInCommandLine": false,
-        "DefaultValue": "True",
+        "DefaultValue": "1",
         "EnumValues": {
             "False": "",
             "True": "1"
@@ -440,7 +440,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "AutoRestart",
         "IncludeInCommandLine": false,
-        "DefaultValue": "True",
+        "DefaultValue": "1",
         "EnumValues": {
             "False": "",
             "True": "1"
@@ -457,7 +457,7 @@
         "IsFlagArgument": false,
         "ParamFieldName": "HiveCleanup",
         "IncludeInCommandLine": false,
-        "DefaultValue": "False",
+        "DefaultValue": "",
         "EnumValues": {
             "False": "",
             "True": "1"
