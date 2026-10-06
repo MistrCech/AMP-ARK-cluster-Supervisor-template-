@@ -165,6 +165,12 @@ Pro jednu konkrétní instanci (bez zásahu do repa) jsou v nastavení AMP:
 | *Discord Bot Token*, *Discord Channel ID* | most chatu do kanálu na Discordu — viz Chat a Discord |
 | *Discord -> Game Chat* | zprávy z kanálu i do hry (výchozí zapnuto) |
 
+Hodnota z nastavení instance má přednost: každý klíč jde na příkazovou řádku jen
+jednou a platí pořadí `ServerSettings.ini` z repa < preset < *Extra Launch Options*
+(např. preset `5x` + `XPMultiplier=1.0` = vše 5× kromě XP). Totéž pro sazby presetu
+v `Game.ini` proti *Game.ini - Extra Lines*. Klíče, které skládá supervisor (porty,
+hesla, `SessionName`, `AltSaveDirectoryName`…), z instance přepsat nejdou.
+
 Jméno serveru je *Server Name* + čitelné jméno mapy („Sarkastic.eu ASA PVE - The Island“).
 
 `GameUserSettings.ini` supervisor **negeneruje**: ručně napsaný ARK celý zahodí a

@@ -567,7 +567,13 @@ def write_shared_config(cfg, presets, preset_name):
     cfg.server_settings = load_server_settings()
     cfg.config_dir.mkdir(parents=True, exist_ok=True)
     preset = presets.get(preset_name) or {}
-    gameini_rates = preset.get("gameini", {})
+    extra = [line.strip() for line in cfg.gameini_extra.splitlines() if line.strip()]
+    # Sazbu presetu, kterou instance nastavuje sama, z Game.ini vynechat -
+    # jinak by tam klic byl dvakrat. Opakovane klice sablony (stacky,
+    # engramy) se netykaji, preset je nema.
+    own = {line.split("=", 1)[0].strip().lower() for line in extra if "=" in line}
+    gameini_rates = {key: value for key, value in preset.get("gameini", {}).items()
+                     if key.lower() not in own}
 
     rates = "\n".join(f"{key}={value}" for key, value in sorted(gameini_rates.items()))
     if not rates:
@@ -582,7 +588,6 @@ def write_shared_config(cfg, presets, preset_name):
             if out.exists():
                 out.chmod(0o644)
             text = template.read_text().replace("{{RATES}}", rates)
-            extra = [line.strip() for line in cfg.gameini_extra.splitlines() if line.strip()]
             if extra:
                 # Konec sablony je porad sekce ShooterGameMode.
                 text += ("\n; --- Z nastaveni instance (Game.ini - vlastni radky) ---\n"
@@ -620,6 +625,13 @@ class MapServer:
     # Na tenhle radek logu se pozna, ze mapa nabehla - nezavisle na RCON,
     # ktery pri zatezi umi byt pomaly. Lisi se podle hry, viz GAMES.
     STARTED_RE = re.compile(PROFILE["started_re"])
+    # Volby URL, ktere sklada supervisor sam (porty, hesla, save, jmeno).
+    # Z nastaveni instance by rozbily cluster - napr. vlastni Port by dal
+    # dvema mapam stejny port.
+    MANAGED_OPTIONS = {"listen", "port", "queryport", "rconenabled", "rconport",
+                       "serveradminpassword", "maxplayers", "altsavedirectoryname",
+                       "rconservergamelogbuffer", "multihome", "serverpassword",
+                       "gamemodids", "sessionname"}
     LOG_PREFIX = re.compile(r"^\[\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}:\d{3}\]\[\s*\d+\]")
 
     def __init__(self, name, index, cfg, cores):
@@ -685,9 +697,25 @@ class MapServer:
             opts.append(f"MultiHome={self.cfg.bind_ip}")
         if self.cfg.server_password:
             opts.append(f"ServerPassword={self.cfg.server_password}")
-        opts.extend(self.cfg.server_settings)
+        # Nastaveni hry: kazdy klic jen jednou a pozdejsi zdroj vyhrava -
+        # ServerSettings.ini z repa < preset < nastaveni instance. Se dvema
+        # vyskyty stejneho klice v URL neni jiste, ktery ARK vezme, takze by
+        # hodnota z instance mohla tise prohrat s vychozi z repa.
+        settings = {}
+
+        def put(option, source):
+            key = option.split("=", 1)[0].strip()
+            if key.lower() in self.MANAGED_OPTIONS:
+                emit(self.name, f"VAROVANI: {key} z {source} vynechano - "
+                                f"spravuje ho supervisor")
+                return
+            settings.pop(key.lower(), None)
+            settings[key.lower()] = option
+
+        for option in self.cfg.server_settings:
+            put(option, "ServerSettings.ini")
         for key, value in sorted(preset_rates.items()):
-            opts.append(f"{key}={value}")
+            put(f"{key}={value}", "presetu")
         for extra in self.cfg.custom_options.replace("\n", "?").split("?"):
             extra = extra.strip()
             if not extra:
@@ -696,7 +724,8 @@ class MapServer:
                 emit(self.name, f"VAROVANI: vlastni volba {extra!r} vynechana - "
                                 f"mezera by prikazovou radku utnula")
                 continue
-            opts.append(extra)
+            put(extra, "Extra Launch Options")
+        opts.extend(settings.values())
         # SessionName POSLEDNI a BEZ uvozovek. UE si prikazovou radku sklada z
         # argv a URL mapy utne u prvni mezery - vsechno za ni tise zmizi.
         # Overeno na v361.7: s 'SessionName="X - Mapa"' uprostred se ztratil
