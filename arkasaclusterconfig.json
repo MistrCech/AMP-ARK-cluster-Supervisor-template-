@@ -259,6 +259,48 @@
         "EnumValues": {}
     },
     {
+        "DisplayName": "Mods",
+        "Category": "ARK Cluster:hub",
+        "Subcategory": "Server:dns:2",
+        "Description": "Cisla projektu modu oddelena carkou. ASA: Project ID z CurseForge, ASE: Steam Workshop ID. Server si mody pri startu stahne sam; vsechny mapy clusteru maji stejne.",
+        "Keywords": "mods,curseforge,workshop",
+        "FieldName": "Mods",
+        "InputType": "text",
+        "IsFlagArgument": false,
+        "ParamFieldName": "Mods",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "Extra Command-Line Switches",
+        "Category": "ARK Cluster:hub",
+        "Subcategory": "Server:dns:2",
+        "Description": "Prepinace za URL mapy pro KAZDOU mapu, napr. -AllowFlyerSpeedLeveling. Oddelene mezerou, kazdy musi zacinat '-'.",
+        "Keywords": "switch,args,commandline",
+        "FieldName": "CustomArgs",
+        "InputType": "text",
+        "IsFlagArgument": false,
+        "ParamFieldName": "CustomArgs",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "Game.ini - Extra Lines",
+        "Category": "ARK Cluster:hub",
+        "Subcategory": "Server:dns:2",
+        "Description": "Radky pripojene na konec generovaneho Game.ini (sekce [/Script/ShooterGame.ShooterGameMode]), napr. bPassiveDefensesDamageRiderlessDinos=True. Jeden na radek.",
+        "Keywords": "game.ini,gameini,extra",
+        "FieldName": "GameIniExtra",
+        "InputType": "Textarea",
+        "IsFlagArgument": false,
+        "ParamFieldName": "GameIniExtra",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "",
+        "EnumValues": {}
+    },
+    {
         "DisplayName": "Cluster ID",
         "Category": "ARK Cluster:hub",
         "Subcategory": "Cluster:group:3",
@@ -304,7 +346,8 @@
         "EnumValues": {
             "normal": "Normal (1x)",
             "2x": "Evolution Event 2x",
-            "4x": "Evolution Event 4x"
+            "4x": "Evolution Event 4x",
+            "5x": "Rates 5x (xp, taming, sber, breeding)"
         }
     },
     {

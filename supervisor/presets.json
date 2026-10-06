@@ -50,5 +50,20 @@
             "LayEggIntervalMultiplier": 0.25,
             "BabyCuddleIntervalMultiplier": 0.25
         }
+    },
+    "5x": {
+        "cmdline": {
+            "XPMultiplier": 5.0,
+            "TamingSpeedMultiplier": 5.0,
+            "HarvestAmountMultiplier": 5.0
+        },
+        "gameini": {
+            "EggHatchSpeedMultiplier": 5.0,
+            "BabyMatureSpeedMultiplier": 5.0,
+            "MatingIntervalMultiplier": 0.2,
+            "BabyFoodConsumptionSpeedMultiplier": 0.2,
+            "LayEggIntervalMultiplier": 0.2,
+            "BabyCuddleIntervalMultiplier": 0.2
+        }
     }
 }

@@ -146,6 +146,18 @@ Konfigurace je generovaná — needituj ji v instanci, přepíše se. Uprav mís
 | `supervisor/presets.json` | násobky eventů |
 | `supervisor/mapfixes.json` | úklid před vypnutím, per mapa (`safe` / `destructive`) |
 
+Pro jednu konkrétní instanci (bez zásahu do repa) jsou v nastavení AMP:
+
+| pole | co |
+|---|---|
+| *Extra Launch Options* | další `[ServerSettings]` na URL mapy, např. `ServerPVE=True` (jedna na řádek) |
+| *Mods* | čísla projektů oddělená čárkou — ASA z CurseForge (`-mods=`), ASE ze Steam Workshopu (`?GameModIds=`); server si je stáhne sám |
+| *Extra Command-Line Switches* | přepínače za URL, např. `-AllowFlyerSpeedLeveling` |
+| *Game.ini - Extra Lines* | řádky na konec generovaného `Game.ini` (sekce `ShooterGameMode`) |
+| *Rate Preset* | `normal` / `2x` / `4x` / `5x` z `presets.json` |
+
+Jméno serveru je *Server Name* + čitelné jméno mapy („Sarkastic.eu ASA PVE - The Island“).
+
 `GameUserSettings.ini` supervisor **negeneruje**: ručně napsaný ARK celý zahodí a
 vytvoří znovu s výchozími hodnotami (ověřeno — stackování ×10 se tak na server
 nikdy nedostalo). Klíče `[ServerSettings]` proto jdou na příkazovou řádku, kde je

@@ -163,6 +163,12 @@ class Config:
         self.cross_chat = env_bool("ARK_CROSS_CHAT")
         self.rate_preset = env("ARK_RATE_PRESET") or "normal"
         self.custom_options = env("ARK_CUSTOM_OPTIONS")
+        # Mody - cisla projektu z CurseForge (ASA) / Steam Workshopu (ASE).
+        self.mods = [m for m in re.split(r"[\s,;]+", env("ARK_MODS")) if m]
+        # Prepinace za URL mapy (-Neco), napr. -AllowFlyerSpeedLeveling.
+        self.custom_args = env("ARK_CUSTOM_ARGS")
+        # Radky navic na konec Game.ini - bez strip, jde o radky.
+        self.gameini_extra = os.environ.get("ARK_GAMEINI_EXTRA", "")
         self.bind_ip = env("ARK_BIND_IP") or "0.0.0.0"
         # MultiHome ma smysl jen kdyz AMP prideli konkretni adresu. Samotna
         # adresa nestaci - bez prepinace -MULTIHOME se funkce nezapne.
@@ -280,6 +286,15 @@ def cpu_list(cpus):
     for first, last in runs:
         out.append(str(first) if first == last else f"{first}-{last}")
     return ",".join(out)
+
+
+def display_name(map_name):
+    """'TheIsland_WP' -> 'The Island', 'ScorchedEarth_P' -> 'Scorched Earth'.
+
+    Do jmena serveru v prohlizeci - hracum interni jmeno mapy nic nerekne.
+    """
+    base = re.sub(r"_(WP|P)$", "", map_name)
+    return re.sub(r"(?<=[a-z])(?=[A-Z0-9])", " ", base)
 
 
 def udp_port_busy(port, host="0.0.0.0"):
@@ -496,7 +511,13 @@ def write_shared_config(cfg, presets, preset_name):
         try:
             if out.exists():
                 out.chmod(0o644)
-            out.write_text(template.read_text().replace("{{RATES}}", rates))
+            text = template.read_text().replace("{{RATES}}", rates)
+            extra = [line.strip() for line in cfg.gameini_extra.splitlines() if line.strip()]
+            if extra:
+                # Konec sablony je porad sekce ShooterGameMode.
+                text += ("\n; --- Z nastaveni instance (Game.ini - vlastni radky) ---\n"
+                         + "\n".join(extra) + "\n")
+            out.write_text(text)
             out.chmod(0o444)
         except OSError as exc:
             log(f"CHYBA: Game.ini nelze zapsat: {exc}")
@@ -607,7 +628,10 @@ class MapServer:
         # argv a URL mapy utne u prvni mezery - vsechno za ni tise zmizi.
         # Overeno na v361.7: s 'SessionName="X - Mapa"' uprostred se ztratil
         # ServerPassword (server byl verejny) a jmeno spadlo na 'ARK #205902'.
-        opts.append(f"SessionName={self.cfg.session_name} - {self.name}")
+        if GAME == "ase" and self.cfg.mods:
+            # ASE stahuje mody sam diky -AutoManagedMods (viz nize).
+            opts.append("GameModIds=" + ",".join(self.cfg.mods))
+        opts.append(f"SessionName={self.cfg.session_name} - {display_name(self.name)}")
 
         args = [str(self.cfg.binary), "?".join(opts)]
         args += [
@@ -627,8 +651,17 @@ class MapServer:
                      f"-QueryPort={self.ports['query']}",
                      f"-WinLiveMaxPlayers={self.cfg.max_players}",
                      "-ServerPlatform=ALL", "-NoBattlEye"]
+            if self.cfg.mods:
+                # Mody z CurseForge si server stahne sam pri startu.
+                args.append("-mods=" + ",".join(self.cfg.mods))
         else:
             args += ["-AutoManagedMods", "-Crossplay", "-server"]
+        for extra in self.cfg.custom_args.split():
+            if extra.startswith("-") and '"' not in extra:
+                args.append(extra)
+            else:
+                emit(self.name, f"VAROVANI: prepinac {extra!r} vynechan - musi "
+                                f"zacinat '-' a nesmi obsahovat uvozovky")
         args += [
             # Vlastni log pro kazdou mapu - jinak 13 map pise do jednoho
             # ShooterGame.log a kazdy start ho prejmenuje na zalohu.
@@ -1680,6 +1713,10 @@ def main():
     if not cfg.binary.exists():
         log(f"CHYBA: server nenalezen na {cfg.binary}. Spust nejdriv Update.")
         return 1
+    bad_mods = [m for m in cfg.mods if not m.isdigit()]
+    if bad_mods:
+        log(f"VAROVANI: mody {', '.join(bad_mods)} nejsou cisla projektu - vynechany")
+        cfg.mods = [m for m in cfg.mods if m.isdigit()]
     for label, value in (("RCON Password", cfg.rcon_password),
                          ("Server Password", cfg.server_password)):
         if value and ("?" in value or '"' in value
