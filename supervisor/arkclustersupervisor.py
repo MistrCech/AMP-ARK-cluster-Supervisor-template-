@@ -23,7 +23,7 @@ import time
 import unicodedata
 from pathlib import Path
 
-from rcon import RconClient, RconError
+from rcon import RconClient, RconError, RconTimeout
 
 IS_WINDOWS = os.name == "nt"
 if IS_WINDOWS:
@@ -932,7 +932,11 @@ class MapServer:
         cleaned = False
         if fixes:
             if rcon_ok:
-                cleaned = self._run_fixes(fixes, save_timeout, deadline)
+                cleaned, busy = self._run_fixes(fixes, save_timeout, deadline)
+                if busy:
+                    # Prikaz bez odpovedi na serveru dal bezi (DestroyWildDinos
+                    # na Astraeos > 15 s, overeno) - RCON je jen zaneprazdneny.
+                    rcon_ok = False
             else:
                 emit(self.name, "RCON neodpovida - uklid vynechan")
         if IS_WINDOWS:
@@ -962,9 +966,10 @@ class MapServer:
             self._wait_exit(15)
             return
         if not rcon_ok:
-            # Mozna jen chvilkove pomaly - bez RCON se mapa korektne vypnout
-            # neda. Nejvys minutu a tak, aby pred koncem rozpoctu zbyl cas.
-            limit = time.time() + 60
+            # Pomaly nebo zaneprazdneny (dobiha uklid) - bez RCON se mapa
+            # korektne vypnout neda. Nejvys save_timeout a tak, aby pred
+            # koncem rozpoctu zbyl cas.
+            limit = time.time() + max(60, save_timeout)
             if deadline is not None:
                 limit = min(limit, deadline - 30)
             while self.running and time.time() < limit:
@@ -1008,33 +1013,42 @@ class MapServer:
     # rozestupem 40 s prosly tri po sobe.
     FIX_SPACING = 45
 
+    # Jak dlouho cekat na odpoved prikazu uklidu. DestroyWildDinos na velke
+    # mape (Astraeos, 16 GB) nestihl 15 s - server ho dodelal, ale supervisor
+    # ho mezitim prohlasil za mrtvy a tvrde ukoncil.
+    FIX_TIMEOUT = 120
+
     def _run_fixes(self, commands, save_timeout, deadline=None):
         """Uklid patri PRED vypnuti - repopulace pak probehne pri bootu.
 
-        Mezi prikazy FIX_SPACING s. Po prvnim prikazu bez odpovedi se konci:
-        RCON neodpovida a kazdy dalsi by jen protahl vypinani o svuj timeout.
-        Uklid se zkrati i tehdy, kdyby jinak nezbyl cas na korektni SIGINT.
+        Vraci (odeslano, zaneprazdneny). Mezi prikazy FIX_SPACING s. Po prvnim
+        prikazu bez odpovedi se konci - kazdy dalsi by jen cekal ve fronte za
+        nim. Uklid se zkrati i tehdy, kdyby jinak nezbyl cas na korektni konec.
         """
-        done = False
+        sent = False
         for position, cmd in enumerate(commands):
-            if deadline is not None and (time.time() + self.FIX_SPACING + 15
+            if deadline is not None and (time.time() + self.FIX_SPACING + self.FIX_TIMEOUT
                                          + save_timeout > deadline):
                 emit(self.name, "zbytek uklidu vynechan - nezbyl by cas "
                                 "na korektni vypnuti")
-                return done
+                return sent, False
             if position:
                 emit(self.name, f"cekam {self.FIX_SPACING} s pred dalsim uklidem")
                 time.sleep(self.FIX_SPACING)
             try:
-                reply = self.rcon.command(cmd, timeout=15)
+                reply = self.rcon.command(cmd, timeout=self.FIX_TIMEOUT)
+            except RconTimeout as exc:
+                emit(self.name, f"FIX {cmd!r} bez odpovedi ({exc}) - server ho "
+                                f"nejspis jeste dodelava, zbytek uklidu vynechan")
+                return True, True
             except (RconError, OSError) as exc:
                 emit(self.name, f"FIX SELHAL {cmd!r}: {exc} - zbytek uklidu "
                                 f"vynechan, RCON neodpovida")
-                return done
-            done = True
+                return sent, True
+            sent = True
             # Preklep v nazvu tridy tise nedela nic - proto se loguje odpoved.
             emit(self.name, f"FIX {cmd} -> {reply or '(prazdna odpoved)'}")
-        return done
+        return sent, False
 
     def _signal(self, sig):
         """Jen POSIX - na Windows send_signal SIGINT nepodporuje."""
@@ -1452,7 +1466,8 @@ class Supervisor:
             self.cmd_rcon(args[0], args[1] if len(args) == 2
                           else self._drop_token(rest))
         elif cmd == "rconall" and rest:
-            self.cmd_all_rcon(rest)
+            # DestroyWildDinos na velke mape trva i desitky sekund.
+            self.cmd_all_rcon(rest, timeout=60)
         elif cmd == "saveall":
             # Velky svet se uklada i desitky sekund - 10 s by ho ohlasilo
             # jako chybu a zavrelo spojeni uprostred.
