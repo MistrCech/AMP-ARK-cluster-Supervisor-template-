@@ -41,9 +41,14 @@ mezi nimi postupně rozejde.
 V AMP přidej repozitář (Configuration → Instance Deployment):
 
 ```
-MistrCech/AMP-ARK-cluster-Supervisor-template-:main      produkce
-MistrCech/AMP-ARK-cluster-Supervisor-template-:staging   testovani
+MistrCech/ArkClusterAMP:main      produkce
+MistrCech/ArkClusterAMP:staging   testovani
 ```
+
+Jméno repozitáře nesmí obsahovat pomlčku: AMP pozná adresář stažené šablony
+jen podle `^(\w+)-(\w+)(-(\w+))?$` (vlastník-repo-větev) a jiný bere jako
+zastaralý — smaže ho a šablony z něj nenačte (ADSModule 2.8). Proto se repo
+jmenuje `ArkClusterAMP`, dřív `AMP-ARK-cluster-Supervisor-template-`.
 
 Hostitel musí být **Linux** a mít **systémový `python3`** (aspoň 3.7) a `git`.
 Supervisor běží na čisté standardní knihovně, takže žádný venv ani pip — stačí
