@@ -34,14 +34,16 @@ class RconClient:
     recv, kazdy Keep Alive by ho obnovil a cekani na odpoved, ktera neprijde,
     by nikdy neskoncilo (overeno na serveru v361.7).
 
-    `terminator` vybira, jak se pozna konec odpovedi - ASE a ASA se lisi:
-    ASE na prazdny RESPONSE_VALUE za prikazem odpovi, takze jeho odpoved
-    spolehlive uzavira odpoved na prikaz. ASA (v94.15) na nej neodpovi a
-    spojeni pak neodpovida VUBEC - ani na dalsi prikazy. Stejne mlci, kdyz
-    prijdou dva pakety v jednom cteni. Na kazdy prikaz ale posle prave jeden
-    paket s jeho id, i kdyz nema co rict (ARK_EMPTY), a prikazy postupne
-    po jednom zvlada na jednom spojeni (overeno: GetChat, ServerChat,
-    Broadcast, SaveWorld, ListPlayers, GetGameLog, DoExit).
+    `terminator` vybira, jak se pozna konec odpovedi - buildy se lisi:
+    ASE na Linuxu na prazdny RESPONSE_VALUE za prikazem odpovi, takze jeho
+    odpoved spolehlive uzavira odpoved na prikaz. ASA (v94.15) ani ASE na
+    Windows (v361.7) na nej neodpovi a spojeni pak neodpovida VUBEC - ani na
+    dalsi prikazy. Stejne mlci, kdyz prijdou dva pakety v jednom cteni. Na
+    kazdy prikaz ale posle prave jeden paket s jeho id, i kdyz nema co rict
+    (ARK_EMPTY), a prikazy postupne po jednom zvlada na jednom spojeni
+    (overeno na ASA: GetChat, ServerChat, Broadcast, SaveWorld, ListPlayers,
+    GetGameLog, DoExit; na ASE Windows: ListPlayers, GetChat, ServerChat,
+    Broadcast, SaveWorld, GetGameLog, DestroyWildDinos).
     """
 
     def __init__(self, host, port, password, timeout=10.0, terminator=True,

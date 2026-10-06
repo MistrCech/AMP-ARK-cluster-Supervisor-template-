@@ -39,9 +39,12 @@ GAMES = {
         "app_dir": "376030",
         "binary": "ShooterGame/Binaries/Linux/ShooterGameServer",
         "config_subdir": "LinuxServer",
-        # ASE bezi i na Windows (ASA jen tam) - na nem tyhle hodnoty.
+        # ASE bezi i na Windows (ASA jen tam) - na nem tyhle hodnoty. RCON
+        # windowsoveho buildu se chova jako ASA: na prazdny paket neodpovi
+        # (v361.7, overeno 6. 10. 2026 - s terminatorem vyprsel kazdy prikaz).
         "windows": {"binary": "ShooterGame/Binaries/Win64/ShooterGameServer.exe",
-                    "config_subdir": "WindowsServer"},
+                    "config_subdir": "WindowsServer",
+                    "rcon_terminator": False},
         "maps": [
             "TheIsland", "TheCenter", "ScorchedEarth_P", "Ragnarok", "Aberration_P",
             "Extinction", "Valguero_P", "Genesis", "CrystalIsles", "Gen2",
@@ -51,6 +54,7 @@ GAMES = {
         "started_re": r'^(?:Server: ".*" has successfully started!'
                       r'|Server has completed startup and is now advertising for join)',
         # Konec odpovedi RCON znaci odpoved na prazdny paket - viz rcon.py.
+        # Jen linuxovy build, Windows viz vyse.
         "rcon_terminator": True,
     },
     "asa": {
