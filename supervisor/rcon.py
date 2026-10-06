@@ -44,12 +44,16 @@ class RconClient:
     Broadcast, SaveWorld, ListPlayers, GetGameLog, DoExit).
     """
 
-    def __init__(self, host, port, password, timeout=10.0, terminator=True):
+    def __init__(self, host, port, password, timeout=10.0, terminator=True,
+                 encoding="utf-8"):
         self.host = host
         self.port = port
         self.password = password
         self.timeout = timeout
         self.terminator = terminator
+        # ASA na Windows odpovida v kodove strance systemu, ne v UTF-8 (znak
+        # mimo ni prijde jako '?', overeno v94.15).
+        self.encoding = encoding
         self._sock = None
         self._next_id = 1
         self._lock = threading.Lock()
@@ -146,7 +150,7 @@ class RconClient:
     def _command_locked(self, cmd, deadline):
         req_id = self._send_locked(SERVERDATA_EXECCOMMAND, cmd, deadline)
         if not self.terminator:
-            return self._finish(self._single_reply_locked(req_id, deadline))
+            return self._finish(self._single_reply_locked(req_id, deadline), self.encoding)
         # Prazdny RESPONSE_VALUE hned za prikazem. ARK zpracovava pakety jednoho
         # spojeni po poradi a odpovi i na nej, takze jeho odpoved spolehlive
         # znaci konec odpovedi na prikaz - bez hadani podle delky paketu a bez
@@ -168,7 +172,7 @@ class RconClient:
             elif pkt_id == end_id:
                 break
             # Jinak Keep Alive (id 0) - zahodit, deadline bezi dal.
-        return self._finish(parts)
+        return self._finish(parts, self.encoding)
 
     def _single_reply_locked(self, req_id, deadline):
         """Odpoved bez terminatoru: prvni paket s id prikazu.
@@ -184,8 +188,8 @@ class RconClient:
             # Jinak Keep Alive (id 0) - zahodit, deadline bezi dal.
 
     @staticmethod
-    def _finish(parts):
-        out = b"".join(parts).decode("utf-8", errors="replace").strip()
+    def _finish(parts, encoding="utf-8"):
+        out = b"".join(parts).decode(encoding, errors="replace").strip()
         return "" if out == ARK_EMPTY else out
 
     # --- protokol ---

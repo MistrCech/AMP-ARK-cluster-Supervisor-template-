@@ -568,7 +568,8 @@ class MapServer:
         self.log_file = cfg.game / "ShooterGame/Saved/Logs" / f"{name}.log"
         rcon_host = cfg.bind_ip if cfg.multihome else "127.0.0.1"
         self.rcon = RconClient(rcon_host, self.ports["rcon"], cfg.rcon_password,
-                               terminator=PROFILE["rcon_terminator"])
+                               terminator=PROFILE["rcon_terminator"],
+                               encoding="mbcs" if IS_WINDOWS else "utf-8")
         self.ready = False
         self._ready_at = 0.0
         # Nastavi cteni logu na radek STARTED_RE.
@@ -1321,12 +1322,15 @@ class Supervisor:
             line)
         if not match:
             return
-        _steam, player, message = match.groups()
+        _account, player, message = match.groups()
+        # ASA dava ke jmenu ikonu platformy - v kodove strance z ni zbude '?'
+        # (v AMP '\ufffd'). Do zpravy nepatri.
+        player = player.strip(" \t\u00a0\ufffd?") or _account.strip(" \t\u00a0\ufffd?")
         # Do konzole AMP vzdy - na tenhle radek cili Console.UserChatRegex.
         emit(origin.name, f"<{player}> {message}")
         if not self.cfg.cross_chat:
             return
-        payload = chat_text(f"[{origin.name}] {player}: {message}")
+        payload = chat_text(f"[{display_name(origin.name)}] {player}: {message}")
         for server in self.maps.values():
             if server is origin or not server.ready or not server.running:
                 continue
