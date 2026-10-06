@@ -56,21 +56,11 @@
         "SkipOnFailure": false
     },
     {
-        "UpdateStageName": "Create Virtual Environment",
+        "UpdateStageName": "Python Check",
         "UpdateSourcePlatform": "Linux",
         "UpdateSource": "Executable",
         "UpdateSourceData": "/bin/bash",
-        "UpdateSourceArgs": "-c \"if ! command -v /usr/bin/python{{PythonVersion}} >/dev/null 2>&1; then echo 'Error: Python {{PythonVersion}} neni nainstalovany. Nainstaluj balicek python{{PythonVersion}} a spust update znovu.'; exit 1; fi; /usr/bin/python{{PythonVersion}} -u -m venv --clear --upgrade-deps \\\"{{$FullBaseDir}}venv\\\"\"",
-        "SkipOnFailure": false
-    },
-    {
-        "UpdateStageName": "Install Python Packages",
-        "UpdateSourcePlatform": "Linux",
-        "UpdateSource": "Executable",
-        "UpdateSourceData": "/bin/bash",
-        "UpdateSourceArgs": "-c \"cd \\\"{{$FullBaseDir}}\\\" && source ./venv/bin/activate && python3 -u -m pip install -U -r ./{{AppDir}}/requirements.txt\"",
-        "UpdateSourceConditionSetting": "PackagesInstallType",
-        "UpdateSourceConditionValue": "file",
+        "UpdateSourceArgs": "-c \"[ -x /usr/bin/python3 ] && /usr/bin/python3 -c 'import sys; sys.exit(sys.version_info < (3, 7))' || { echo 'Error: chybi /usr/bin/python3 (aspon 3.7). Supervisor bezi na ciste standardni knihovne, staci systemovy python3: apt install python3'; exit 1; }; /usr/bin/python3 --version\"",
         "SkipOnFailure": false
     }
 ]

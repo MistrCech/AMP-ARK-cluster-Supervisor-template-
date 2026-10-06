@@ -1,7 +1,7 @@
 {
     "_comment": [
         "Uklid pousteny PRED vypnutim kazde mapy, pri kazdem restartu.",
-        "Poradi ve stop(): tyhle prikazy -> SaveWorld -> DoExit.",
+        "Poradi ve stop(): tyhle prikazy (rozestup 45 s) -> SIGINT, pri kterem ARK ulozi svet.",
         "Repopulace divoke fauny pak probehne pri bootu, kdy nikdo nehraje.",
         "",
         "DVE SKUPINY:",
@@ -25,8 +25,10 @@
         "rcon.py normalizuje na prazdny retezec). Log v supervisoru tedy dokazuje",
         "jen to, ze prikaz dorazil na server, NE ze neco nasel. Drive tu stalo,",
         "ze log preklep odhali - to nebyla pravda.",
-        "Novou tridu proto over ve hre pres 'cheat GetAll <Trida>' DRIV, nez ji",
-        "sem pridas. Supervisor to umi: prikaz 'verifyfixes <mapa>'."
+        "Novou tridu proto over DRIV, nez ji sem pridas - ve hre, v admin konzoli",
+        "klienta: 'cheat GetAll <Trida>'. Pres RCON to nejde: GetAll tam nevraci nic.",
+        "Prikazy tu jsou BEZ prefixu 'cheat' - ten RCON potvrdi, ale prikaz",
+        "neprovede (overeno na v361.7)."
     ],
     "_todo": [
         "Kandidati, ktere je potreba nejdriv overit pres GetAll, pak teprve zapnout:",
@@ -40,83 +42,83 @@
     ],
     "_default": {
         "safe": [
-            "cheat DestroyWildDinos"
+            "DestroyWildDinos"
         ],
         "destructive": []
     },
     "TheIsland": {
         "safe": [
-            "cheat DestroyWildDinos"
+            "DestroyWildDinos"
         ],
         "destructive": [
-            "cheat DestroyAll BeeHive_C 1"
+            "DestroyAll BeeHive_C 1"
         ]
     },
     "TheCenter": {
         "safe": [
-            "cheat DestroyWildDinos"
+            "DestroyWildDinos"
         ],
         "destructive": [
-            "cheat DestroyAll BeeHive_C 1"
+            "DestroyAll BeeHive_C 1"
         ]
     },
     "ScorchedEarth_P": {
         "safe": [
-            "cheat DestroyWildDinos",
-            "cheat DestroyAll WyvernNest_C 1",
-            "cheat DestroyAll DroppedItemGeneric_FertilizedEgg_NoPhysicsWyvern_C 1"
+            "DestroyWildDinos",
+            "DestroyAll WyvernNest_C 1",
+            "DestroyAll DroppedItemGeneric_FertilizedEgg_NoPhysicsWyvern_C 1"
         ],
         "destructive": []
     },
     "Ragnarok": {
         "safe": [
-            "cheat DestroyWildDinos",
-            "cheat DestroyAll WyvernNest_C 1",
-            "cheat DestroyAll DroppedItemGeneric_FertilizedEgg_NoPhysicsWyvern_C 1"
+            "DestroyWildDinos",
+            "DestroyAll WyvernNest_C 1",
+            "DestroyAll DroppedItemGeneric_FertilizedEgg_NoPhysicsWyvern_C 1"
         ],
         "destructive": [
-            "cheat DestroyAll BeeHive_C 1"
+            "DestroyAll BeeHive_C 1"
         ]
     },
     "Aberration_P": {
         "safe": [
-            "cheat DestroyWildDinos",
-            "cheat DestroyAll DroppedItemGeneric_FertilizedEgg_RockDrake_NoPhysics_C 1"
+            "DestroyWildDinos",
+            "DestroyAll DroppedItemGeneric_FertilizedEgg_RockDrake_NoPhysics_C 1"
         ],
         "destructive": []
     },
     "Valguero_P": {
         "safe": [
-            "cheat DestroyWildDinos",
-            "cheat DestroyAll WyvernNest_C 1",
-            "cheat DestroyAll DroppedItemGeneric_FertilizedEgg_NoPhysicsWyvern_C 1"
+            "DestroyWildDinos",
+            "DestroyAll WyvernNest_C 1",
+            "DestroyAll DroppedItemGeneric_FertilizedEgg_NoPhysicsWyvern_C 1"
         ],
         "destructive": [
-            "cheat DestroyAll BeeHive_C 1"
+            "DestroyAll BeeHive_C 1"
         ]
     },
     "CrystalIsles": {
         "safe": [
-            "cheat DestroyWildDinos",
-            "cheat DestroyAll DroppedItemGeneric_FertilizedEgg_CrystalWyvern_C 1"
+            "DestroyWildDinos",
+            "DestroyAll DroppedItemGeneric_FertilizedEgg_CrystalWyvern_C 1"
         ],
         "destructive": [
-            "cheat DestroyAll BeeHive_C 1"
+            "DestroyAll BeeHive_C 1"
         ]
     },
     "LostIsland": {
         "safe": [
-            "cheat DestroyWildDinos",
-            "cheat DestroyAll WyvernNest_C 1",
-            "cheat DestroyAll DroppedItemGeneric_FertilizedEgg_NoPhysicsWyvern_C 1"
+            "DestroyWildDinos",
+            "DestroyAll WyvernNest_C 1",
+            "DestroyAll DroppedItemGeneric_FertilizedEgg_NoPhysicsWyvern_C 1"
         ],
         "destructive": []
     },
     "Fjordur": {
         "safe": [
-            "cheat DestroyWildDinos",
-            "cheat DestroyAll WyvernNest_C 1",
-            "cheat DestroyAll DroppedItemGeneric_FertilizedEgg_NoPhysicsWyvern_C 1"
+            "DestroyWildDinos",
+            "DestroyAll WyvernNest_C 1",
+            "DestroyAll DroppedItemGeneric_FertilizedEgg_NoPhysicsWyvern_C 1"
         ],
         "destructive": []
     }

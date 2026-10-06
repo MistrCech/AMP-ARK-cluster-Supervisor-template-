@@ -7,9 +7,12 @@ cte z promennych prostredi, ktere naplni sablona.
 
 Prikazy prijima na stdin - tim je konzole AMP zaroven ovladacim panelem.
 """
+import configparser
 import json
 import os
 import re
+import resource
+import secrets
 import shlex
 import signal
 import subprocess
@@ -105,6 +108,8 @@ class Config:
         # Musi odpovidat App.ExitTimeout v sablone. SIGKILL od AMP se chytit
         # neda, takze jedina obrana je stihnout to driv.
         self.exit_timeout = env_int("ARK_EXIT_TIMEOUT", 900)
+        # Plni write_shared_config z config/ServerSettings.ini.
+        self.server_settings = []
 
         self.game_port = env_int("ARK_GAME_PORT", 7777)
         self.query_port = env_int("ARK_QUERY_PORT", 27015)
@@ -162,7 +167,15 @@ def physical_cores():
 
 def assign_cores(map_names):
     """Kazda mapa dostane vlastni fyzicke jadro. Zadne dve nesdileji vlakno."""
+    # Jen CPU, ktere proces smi pouzit - v kontejneru AMP s omezenym cpusetem
+    # by jinak pinning mohl mirit na zakazana jadra a selhat.
+    try:
+        allowed = os.sched_getaffinity(0)
+    except OSError:
+        allowed = None
     cores = physical_cores()
+    if allowed is not None:
+        cores = [core & allowed for core in cores if core & allowed]
     if not cores:
         log("VAROVANI: topologii CPU se nepodarilo precist, pinning vypnut")
         return {}
@@ -172,6 +185,44 @@ def assign_cores(map_names):
         log(f"VAROVANI: {len(map_names)} map na {len(pool)} fyzickych jader - "
             f"nektere se o jadro podeli")
     return {name: pool[i % len(pool)] for i, name in enumerate(map_names)}
+
+
+def proc_rss_kb(pid):
+    """VmRSS procesu v kB, 0 kdyz proces neni."""
+    try:
+        with open(f"/proc/{pid}/status") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+def proc_cpu_ticks(pid):
+    """utime + stime procesu (vsechna vlakna) v tikach hodin, None kdyz neni."""
+    try:
+        with open(f"/proc/{pid}/stat") as handle:
+            # comm muze obsahovat mezery i zavorky - delit az za posledni ')'.
+            fields = handle.read().rsplit(")", 1)[1].split()
+        return int(fields[11]) + int(fields[12])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+# ListPlayers: "0. Jmeno, 76561198012345678" - u crossplay muze byt misto
+# SteamID id EOS (hex). Jmeno muze obsahovat carku, id je az za posledni.
+PLAYER_LINE = re.compile(r"^\s*\d+\.\s*(?P<name>.+?),\s*(?P<id>[0-9A-Za-z]+)\s*$")
+
+
+def parse_players(reply):
+    """id -> jmeno. "No Players Connected" i cokoli necekaneho = zadny hrac."""
+    out = {}
+    for line in reply.splitlines():
+        match = PLAYER_LINE.match(line)
+        if match:
+            out[match.group("id")] = match.group("name").strip()
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -195,11 +246,19 @@ class State:
     """
 
     def __init__(self, default_preset):
-        self.data = {"preset": default_preset, "pending": None}
+        self.data = {"preset": default_preset, "pending": None,
+                     "amp_preset": default_preset}
         if STATE_FILE.exists():
             loaded = load_json(STATE_FILE, None)
             if isinstance(loaded, dict):
                 self.data.update(loaded)
+        # Rate Preset v nastaveni AMP se od posledniho behu zmenil -> ma
+        # prednost pred presetem, ktery zbyl ve stavu (napr. po 'event set').
+        # Bez toho by prepnuti v nastaveni instance nemelo zadny efekt.
+        if self.data.get("amp_preset") != default_preset:
+            self.data.update(preset=default_preset, pending=None,
+                             amp_preset=default_preset)
+            self.save()
 
     @property
     def preset(self):
@@ -221,10 +280,24 @@ class State:
             self.save()
         return self.preset
 
+    def rcon_password(self):
+        """Formular slibuje 'prazdne = vygeneruje se nahodne'.
+
+        Heslo se uklada do stavu, aby prezilo restart - jinak by se menilo
+        s kazdym startem a externi RCON nastroje by prestaly fungovat.
+        """
+        if not self.data.get("rcon_password"):
+            self.data["rcon_password"] = secrets.token_urlsafe(18)
+            self.save()
+            log(f"RCON heslo neni nastavene - vygenerovano, je v {STATE_FILE.name}")
+        return self.data["rcon_password"]
+
     def save(self):
         try:
             tmp = STATE_FILE.with_suffix(".tmp")
             tmp.write_text(json.dumps(self.data, indent=2))
+            # Muze obsahovat RCON heslo.
+            tmp.chmod(0o600)
             tmp.replace(STATE_FILE)
         except OSError as exc:
             log(f"VAROVANI: stav se nepodarilo ulozit: {exc}")
@@ -234,13 +307,45 @@ class State:
 # Generovani sdilene konfigurace
 # --------------------------------------------------------------------------
 
-def write_shared_config(cfg, presets, preset_name):
-    """Slozi Game.ini a GameUserSettings.ini ze sablon a zamkne je.
+def load_server_settings():
+    """[ServerSettings] z config/ServerSettings.ini -> ["Klic=hodnota", ...].
 
-    Soubory se generuji zamerne: ARK si GameUserSettings.ini pri vypnuti
-    prepisuje vlastnimi hodnotami, takze bez chmod 444 by se konfigurace
-    postupne rozesla mezi mapami.
+    Jde to na prikazovou radku, ne do GameUserSettings.ini: rucne psany
+    GameUserSettings.ini ARK cely zahodi (overeno na v361.7), hodnoty z
+    prikazove radky prevezme.
     """
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str           # ARK rozlisuje velikost pismen v klicich
+    path = HERE / "config" / "ServerSettings.ini"
+    try:
+        with open(path, encoding="utf-8") as handle:
+            parser.read_file(handle)
+    except (OSError, configparser.Error) as exc:
+        log(f"VAROVANI: {path.name} nelze precist ({exc}) - ServerSettings vynechany")
+        return []
+    out = []
+    if parser.has_section("ServerSettings"):
+        for key, value in parser.items("ServerSettings"):
+            value = value.strip()
+            # Mezera prikazovou radku utne, '?' ji rozdeli - oboji by tise
+            # zahodilo vsechno za timhle klicem.
+            if not value or "?" in value or any(ch.isspace() for ch in value):
+                log(f"VAROVANI: {key}={value!r} vynechano - prazdne, s mezerou "
+                    f"nebo '?' by rozbilo prikazovou radku")
+                continue
+            out.append(f"{key}={value}")
+    return out
+
+
+def write_shared_config(cfg, presets, preset_name):
+    """Pred startem mapy: Game.ini ze sablony a ServerSettings pro prikazovou radku.
+
+    Game.ini se generuje a zamyka na 444 - ve vsech testech ho ARK nechal
+    netknuty. GameUserSettings.ini se ZAMERNE negeneruje: ARK ho rucne napsany
+    zahodi a pri kazdem startu i vypnuti si ho stejne prepise sam (zamek 444
+    ho nezastavi - soubor smaze a zalozi znovu).
+    """
+    cfg.server_settings = load_server_settings()
     cfg.config_dir.mkdir(parents=True, exist_ok=True)
     preset = presets.get(preset_name) or {}
     gameini_rates = preset.get("gameini", {})
@@ -249,31 +354,20 @@ def write_shared_config(cfg, presets, preset_name):
     if not rates:
         rates = "; (preset 'normal' - zadne prepisy)"
 
-    targets = [
-        ("Game.ini.template", "Game.ini", {"{{RATES}}": rates}),
-        ("GameUserSettings.ini.template", "GameUserSettings.ini", {
-            "{{RCON_PASSWORD}}": cfg.rcon_password,
-            "{{SESSION_NAME}}": cfg.session_name,
-            "{{MAX_PLAYERS}}": str(cfg.max_players),
-        }),
-    ]
-    for template_name, out_name, substitutions in targets:
-        template = HERE / "config" / template_name
-        if not template.exists():
-            log(f"VAROVANI: chybi sablona {template_name}, {out_name} se negeneruje")
-            continue
-        text = template.read_text()
-        for needle, value in substitutions.items():
-            text = text.replace(needle, value)
-        out = cfg.config_dir / out_name
+    template = HERE / "config" / "Game.ini.template"
+    out = cfg.config_dir / "Game.ini"
+    if not template.exists():
+        log("VAROVANI: chybi sablona Game.ini.template, Game.ini se negeneruje")
+    else:
         try:
             if out.exists():
                 out.chmod(0o644)
-            out.write_text(text)
+            out.write_text(template.read_text().replace("{{RATES}}", rates))
             out.chmod(0o444)
         except OSError as exc:
-            log(f"CHYBA: {out_name} nelze zapsat: {exc}")
-    log(f"Sdileny konfig vygenerovan, preset '{preset_name}', zamceno na 444")
+            log(f"CHYBA: Game.ini nelze zapsat: {exc}")
+    log(f"Konfig pripraven: preset '{preset_name}', Game.ini zamceno na 444, "
+        f"ServerSettings {len(cfg.server_settings)} klicu na prikazovou radku")
 
 
 # --------------------------------------------------------------------------
@@ -281,9 +375,17 @@ def write_shared_config(cfg, presets, preset_name):
 # --------------------------------------------------------------------------
 
 class MapServer:
-    READY_RE = re.compile(r"\bjoined this ARK|\bServer: |Full Startup", re.I)
-    JOIN_RE = re.compile(r"^[\d.]+_[\d.]+: (?P<user>.+?) joined this ARK!")
-    LEAVE_RE = re.compile(r"^[\d.]+_[\d.]+: (?P<user>.+?) left this ARK!")
+    # Radky logu mapy, ktere do konzole AMP nepatri. "Commandline:" ARK vypisuje
+    # cely i s hesly - ten ven nesmi NIKDY.
+    LOG_DROP = re.compile(
+        r"^(?:Commandline:|Log file open|Number of cores|ADayCycleManager"
+        r"|Server attempting to run new years|Sever Is not set to official"
+        r"|Set New Years event location|SteamSocketsOpenSource: gethostname failed"
+        r"|gethostbyname failed)")
+    # Na tenhle radek logu se pozna, ze mapa nabehla - za 30-40 s a nezavisle
+    # na RCON, ktery nabiha o chvili pozdeji a pri zatezi umi byt pomaly.
+    STARTED_RE = re.compile(r'^Server: ".*" has successfully started!')
+    LOG_PREFIX = re.compile(r"^\[\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}:\d{3}\]\[\s*\d+\]")
 
     def __init__(self, name, index, cfg, cores):
         self.name = name
@@ -292,12 +394,20 @@ class MapServer:
         self.cores = cores
         self.ports = cfg.ports_for(index)
         self.proc = None
+        # -log=<Mapa>.log - viz command_line.
+        self.log_file = cfg.game / "ShooterGame/Saved/Logs" / f"{name}.log"
         rcon_host = cfg.bind_ip if cfg.multihome else "127.0.0.1"
         self.rcon = RconClient(rcon_host, self.ports["rcon"], cfg.rcon_password)
         self.ready = False
         self._ready_at = 0.0
+        # Nastavi cteni logu na "Server: ... has successfully started!".
+        self.started = threading.Event()
         self.restarts = 0
-        self.players = set()
+        self.started_at = 0.0
+        self.gave_up = False
+        # id -> jmeno. Vzdy se NAHRAZUJE celym slovnikem, nikdy nemeni na
+        # miste - ctenari (status, whereis, metriky) pak iteruji bez zamku.
+        self.players = {}
         self._reader = None
         # Zamysleny stav. Bez nej by hlidac po 30 s vratil mapu, kterou
         # obsluha zamerne zastavila.
@@ -308,6 +418,11 @@ class MapServer:
     # --- spousteni ---
 
     def command_line(self, preset_rates):
+        # Hesla MUSI byt na prikazove radce, i kdyz je odtud vidi kazdy lokalni
+        # uzivatel v /proc/*/cmdline (a ARK radek vypise do logu). Overeno na
+        # v361.7: bez ServerAdminPassword na radce se RCON port vubec neotevre
+        # a ServerPassword jen z GameUserSettings.ini nechal server verejny.
+        # Obrana je na urovni systemu (mount /proc s hidepid=2).
         opts = [
             self.name,
             "listen",
@@ -319,19 +434,29 @@ class MapServer:
             f"MaxPlayers={self.cfg.max_players}",
             # Kazda mapa MUSI mit vlastni save adresar, jinak si prepisou svet.
             f"AltSaveDirectoryName={self.name}",
-            f'SessionName="{self.cfg.session_name} - {self.name}"',
             "RCONServerGameLogBuffer=600",
         ]
         if self.cfg.multihome:
             opts.append(f"MultiHome={self.cfg.bind_ip}")
         if self.cfg.server_password:
             opts.append(f"ServerPassword={self.cfg.server_password}")
+        opts.extend(self.cfg.server_settings)
         for key, value in sorted(preset_rates.items()):
             opts.append(f"{key}={value}")
         for extra in self.cfg.custom_options.replace("\n", "?").split("?"):
             extra = extra.strip()
-            if extra:
-                opts.append(extra)
+            if not extra:
+                continue
+            if any(ch.isspace() for ch in extra):
+                emit(self.name, f"VAROVANI: vlastni volba {extra!r} vynechana - "
+                                f"mezera by prikazovou radku utnula")
+                continue
+            opts.append(extra)
+        # SessionName POSLEDNI a BEZ uvozovek. UE si prikazovou radku sklada z
+        # argv a URL mapy utne u prvni mezery - vsechno za ni tise zmizi.
+        # Overeno na v361.7: s 'SessionName="X - Mapa"' uprostred se ztratil
+        # ServerPassword (server byl verejny) a jmeno spadlo na 'ARK #205902'.
+        opts.append(f"SessionName={self.cfg.session_name} - {self.name}")
 
         args = [str(self.cfg.binary), "?".join(opts)]
         args += [
@@ -340,7 +465,11 @@ class MapServer:
             "-AutoManagedMods",
             "-Crossplay",
             "-server",
-            "-log",
+            # Vlastni log pro kazdou mapu - jinak 13 map pise do jednoho
+            # ShooterGame.log a kazdy start ho prejmenuje na zalohu.
+            f"-log={self.name}.log",
+            # ARK jinak log drzi v bufferu a za behu je soubor prazdny.
+            "-forcelogflush",
             "-servergamelog",
         ]
         if self.cfg.multihome:
@@ -357,34 +486,122 @@ class MapServer:
             emit(self.name, "uz bezi, start preskocen")
             return
         self.desired_up = True
+        self.started_at = time.time()
+        self.gave_up = False
         self.ready = False
         self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
         self.cfg.cluster_dir.mkdir(parents=True, exist_ok=True)
         self.ready = False
-        self.players.clear()
+        self.started.clear()
+        self.players = {}
 
         args = self.command_line(preset_rates)
+        old_log = self._log_identity()
         emit(self.name, f"start na portech game={self.ports['game']} "
                         f"query={self.ports['query']} rcon={self.ports['rcon']}")
-        self.proc = subprocess.Popen(
-            args,
-            cwd=str(self.cfg.workdir),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            bufsize=1,
-            text=True,
-            errors="replace",
-        )
+        # Afinita je na Linuxu vlastnost VLAKNA a fork ji dedi od vlakna, ktere
+        # ho vola. Nastavit ji procesu az po startu chyti jen hlavni vlakno -
+        # co server stihne vytvorit driv, zustane na vsech jadrech. Proto se na
+        # okamzik prisprendli volajici vlakno a server se narodi uz pripnuty,
+        # vcetne vsech svych budoucich vlaken.
+        restore = None
         if self.cfg.cpu_pinning and self.cores:
             try:
-                os.sched_setaffinity(self.proc.pid, self.cores)
-                emit(self.name, f"pin na CPU {sorted(self.cores)}")
+                restore = os.sched_getaffinity(0)
+                os.sched_setaffinity(0, self.cores)
             except OSError as exc:
+                restore = None
                 emit(self.name, f"VAROVANI: pinning selhal: {exc}")
+        try:
+            self.proc = subprocess.Popen(
+                args,
+                cwd=str(self.cfg.workdir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                bufsize=1,
+                text=True,
+                errors="replace",
+            )
+        finally:
+            if restore is not None:
+                try:
+                    os.sched_setaffinity(0, restore)
+                except OSError:
+                    pass
+        if restore is not None:
+            emit(self.name, f"pin na CPU {sorted(self.cores)}")
 
         self._reader = threading.Thread(target=self._pump_output, daemon=True)
         self._reader.start()
+        threading.Thread(target=self._tail_log, args=(self.proc, old_log),
+                         daemon=True).start()
+
+    def _log_identity(self):
+        """(inode, zacatek souboru) logu mapy, nebo None.
+
+        ARK pri startu stary log ZKOPIRUJE do zalohy a puvodni soubor vyprazdni
+        a pise do nej znovu - inode zustava stejny (overeno). Novy log se proto
+        pozna podle hlavicky "Log file open, <datum a cas>" na zacatku.
+        """
+        try:
+            with open(self.log_file, "rb") as handle:
+                return os.fstat(handle.fileno()).st_ino, handle.read(100)
+        except OSError:
+            return None
+
+    def _tail_log(self, proc, old_identity):
+        """Posila radky logu mapy do konzole.
+
+        Na stdout ARK skoro nic nepise (dva radky ze Steam API), takze bez
+        tohohle by v konzoli AMP nebylo ze serveru videt nic - ani start, ani
+        savy, ani chyby.
+        """
+        handle, partial = None, ""
+        try:
+            while True:
+                alive = proc.poll() is None
+                if handle is None:
+                    current = self._log_identity()
+                    # Novy log: jina hlavicka (nebo inode) a uz neco obsahuje.
+                    if current and current != old_identity and current[1]:
+                        try:
+                            handle = open(self.log_file, encoding="utf-8-sig",
+                                          errors="replace", newline="")
+                        except OSError:
+                            handle = None
+                    if handle is None:
+                        if not alive:
+                            return
+                        time.sleep(0.2)
+                        continue
+                chunk = handle.readline()
+                if not chunk:
+                    if not alive:
+                        return          # proces skoncil a zbytek je doctene
+                    try:
+                        # Zkraceny soubor (dalsi start mapy) - cist od zacatku.
+                        if os.fstat(handle.fileno()).st_size < handle.tell():
+                            handle.seek(0)
+                            partial = ""
+                    except (OSError, ValueError):
+                        pass
+                    time.sleep(0.5)
+                    continue
+                partial += chunk
+                if not partial.endswith("\n"):
+                    continue            # radek jeste neni cely
+                line, partial = partial, ""
+                text = self.LOG_PREFIX.sub("", line.strip("\r\n")).strip()
+                if self.STARTED_RE.match(text):
+                    self.started.set()
+                if text and not self.LOG_DROP.match(text):
+                    emit(self.name, text)
+        except (OSError, ValueError):
+            pass
+        finally:
+            if handle:
+                handle.close()
 
     def _pump_output(self):
         """Cte vystup serveru a normalizuje ho na format, ktery ceka AMP."""
@@ -399,15 +616,9 @@ class MapServer:
                 if handle:
                     handle.write(line + "\n")
                     handle.flush()
-                join = self.JOIN_RE.search(line)
-                leave = self.LEAVE_RE.search(line)
-                if join:
-                    self.players.add(join.group("user"))
-                    emit(self.name, f">>> {join.group('user')} joined this ARK!")
-                elif leave:
-                    self.players.discard(leave.group("user"))
-                    emit(self.name, f"<<< {leave.group('user')} left this ARK!")
-                elif line.strip():
+                # Herni log na stdout NENI (v361.7 tu jsou jen dva radky ze
+                # Steam API) - hraci jdou z ListPlayers, viz players_loop.
+                if line.strip():
                     emit(self.name, line)
         except (OSError, ValueError):
             pass
@@ -442,83 +653,102 @@ class MapServer:
             return False
 
     def wait_ready(self, timeout):
-        """Ready = RCON odpovida. Spolehlivejsi nez hledani hlasky v logu."""
+        """Ceka, az mapa nabehne: radek v logu, nebo odpoved RCON.
+
+        Log je spolehlivy (30-40 s) a nezavisly na RCON. Funkce zavisle na
+        RCON (chat, hraci) si ho overuji samy - players_loop drzi "ready".
+        """
         deadline = time.time() + timeout
+        next_probe = 0.0
         while time.time() < deadline:
+            # Vypinani (stop nastavi desired_up=False) - necekat dal na start.
+            if not self.desired_up:
+                return False
             if not self.running:
                 emit(self.name, "CHYBA: proces skoncil driv, nez nabehl")
                 return False
-            if self.probe_ready(timeout=5.0, cache=0.0):
+            if self.started.is_set():
                 emit(self.name, "ready")
                 return True
-            time.sleep(5)
+            if time.time() >= next_probe:
+                if self.probe_ready(timeout=5.0, cache=0.0):
+                    emit(self.name, "ready (RCON)")
+                    return True
+                next_probe = time.time() + 15
+            self.started.wait(1.0)
         emit(self.name, f"VAROVANI: nenabehla do {timeout} s")
         return False
 
     # --- ukonceni ---
 
-    def stop(self, fixes, save_timeout):
+    def stop(self, fixes, save_timeout, deadline=None):
+        """deadline: cas (time.time()), do kdy musi byt mapa dole - rozpocet
+        vypinani clusteru. Uklid se podle nej zkrati, SIGINT ma prednost."""
         with self._lock:
-            self._stop_locked(fixes, save_timeout)
+            self._stop_locked(fixes, save_timeout, deadline)
 
-    def _stop_locked(self, fixes, save_timeout):
-        """Zebrik: uklid -> SaveWorld -> DoExit -> SIGINT -> SIGKILL.
+    def _stop_locked(self, fixes, save_timeout, deadline=None):
+        """Zebrik: uklid -> SIGINT -> SIGKILL.
 
-        SaveWorld navic je cely rozdil mezi 'server se vypnul' a 'neprisel
-        jsi o svet'. LinuxGSM ho pred zabitim nedela.
+        SIGINT ARK svet ulozi a do par sekund skonci (overeno na v361.7, 7/7)
+        a funguje, i kdyz RCON neodpovida. RCON SaveWorld se sem zamerne
+        nedava: ARK po nem RCON obcas na minuty umlci (viz README) a SIGINT
+        uklada tak jako tak.
         """
         # Nastavit i kdyz uz mapa nebezi - jinak by ji hlidac zvedl zpatky.
         self.desired_up = False
         if not self.running:
             return
-        if self.probe_ready():
-            self._run_fixes(fixes)
-            # Save velkeho sveta trva desitky sekund. Bez explicitniho
-            # timeoutu by socket spadl na 10 s, prikaz se poslal znovu a do
-            # sveta by se psalo dvakrat naraz.
-            saved = self._rcon_wait("cheat SaveWorld", save_timeout)
-            if not saved:
-                emit(self.name, "VAROVANI: SaveWorld nepotvrzen, "
-                                "vypinam presto (hrozi starsi svet)")
-            self._rcon_wait("cheat DoExit", 30)
-
-        if self._wait_exit(save_timeout):
+        if fixes:
+            if self.probe_ready():
+                self._run_fixes(fixes, save_timeout, deadline)
+            else:
+                emit(self.name, "RCON neodpovida - uklid vynechan")
+        # ARK posloucha na SIGINT, ne SIGTERM; pri nem svet ulozi.
+        emit(self.name, "posilam SIGINT (ARK pri nem svet ulozi)")
+        self._signal(signal.SIGINT)
+        wait = save_timeout
+        if deadline is not None:
+            # SIGKILL ze stop_all prijde po deadline - do te doby to musi stihnout.
+            wait = max(5, min(save_timeout, deadline - time.time() - 5))
+        if self._wait_exit(wait):
             emit(self.name, "ukonceno korektne")
             return
-        # ARK poslouncha na SIGINT, ne SIGTERM - proto tenhle krok.
-        emit(self.name, "neukoncil se sam, posilam SIGINT")
-        self._signal(signal.SIGINT)
-        if self._wait_exit(60):
-            emit(self.name, "ukonceno po SIGINT")
-            return
-        emit(self.name, "CHYBA: nereaguje, SIGKILL (svet muze byt starsi)")
+        emit(self.name, "CHYBA: nereaguje ani na SIGINT, SIGKILL "
+                        "(svet muze byt starsi)")
         self._signal(signal.SIGKILL)
         self._wait_exit(15)
 
-    def _run_fixes(self, commands):
-        """Uklid patri PRED vypnuti - repopulace pak probehne pri bootu."""
-        for cmd in commands:
+    # Rozestup mezi tezkymi prikazy uklidu. Overeno na v361.7: tezky prikaz
+    # (DestroyWildDinos, DestroyAll, SaveWorld) poslany par sekund po jinem
+    # tezkem prikazu nedostal odpoved a RCON mapy pak minuty mlcel; s
+    # rozestupem 40 s prosly tri po sobe.
+    FIX_SPACING = 45
+
+    def _run_fixes(self, commands, save_timeout, deadline=None):
+        """Uklid patri PRED vypnuti - repopulace pak probehne pri bootu.
+
+        Mezi prikazy FIX_SPACING s. Po prvnim prikazu bez odpovedi se konci:
+        RCON neodpovida a kazdy dalsi by jen protahl vypinani o svuj timeout.
+        Uklid se zkrati i tehdy, kdyby jinak nezbyl cas na korektni SIGINT.
+        """
+        for position, cmd in enumerate(commands):
+            if deadline is not None and (time.time() + self.FIX_SPACING + 15
+                                         + save_timeout > deadline):
+                emit(self.name, "zbytek uklidu vynechan - nezbyl by cas "
+                                "na korektni vypnuti")
+                return
+            if position:
+                emit(self.name, f"cekam {self.FIX_SPACING} s pred dalsim uklidem")
+                time.sleep(self.FIX_SPACING)
             try:
-                reply = self.rcon.command(cmd)
+                reply = self.rcon.command(cmd, timeout=15)
             except (RconError, OSError) as exc:
-                emit(self.name, f"FIX SELHAL {cmd!r}: {exc}")
-                continue
+                emit(self.name, f"FIX SELHAL {cmd!r}: {exc} - zbytek uklidu "
+                                f"vynechan, RCON neodpovida")
+                return
             # Preklep v nazvu tridy tise nedela nic - proto se loguje odpoved.
             emit(self.name, f"FIX {cmd} -> {reply or '(prazdna odpoved)'}")
-
-    def _rcon_wait(self, cmd, timeout):
-        """Posle prikaz a POCKA na nej. Vraci True, kdyz server odpovedel.
-
-        retry=False je zamerne: opakovat SaveWorld, ktery jeste bezi, znamena
-        psat do stejnych souboru dvakrat - presne tak vznikaji useknute .ark.
-        """
-        try:
-            self.rcon.command(cmd, retry=False, timeout=timeout)
-            emit(self.name, f"{cmd} potvrzeno")
-            return True
-        except (RconError, OSError) as exc:
-            emit(self.name, f"VAROVANI: {cmd} selhalo: {exc}")
-            return False
 
     def _signal(self, sig):
         try:
@@ -547,7 +777,14 @@ class Supervisor:
         self.presets = load_json(HERE / "presets.json", {"normal": {}})
         self.fixes = load_json(HERE / "mapfixes.json", {})
         self.state = State(cfg.rate_preset)
+        # Musi byt pred vytvorenim map - RCON klient dostava heslo v konstruktoru.
+        if not cfg.rcon_password:
+            cfg.rcon_password = self.state.rcon_password()
         self.stopping = threading.Event()
+        # Nastavi se, az stop_all DOBEHNE - druhy volajici (signal behem DoExit)
+        # na nej pocka, misto aby proces ukoncil uprostred vypinani.
+        self.stopped = threading.Event()
+        self._stop_claim = threading.Lock()
         self.quiesced = False
         # Zabranuje tomu, aby stop_all prosel kolem mapy, kterou prave
         # startuje start_all nebo hlidac - takova mapa by prezila supervisor.
@@ -579,19 +816,38 @@ class Supervisor:
 
     # --- zivotni cyklus ---
 
+    def _safe_start(self, server):
+        """server.start, ktery volajici vlakno neshodi.
+
+        Popen umi vyhodit OSError (chybi binarka po nepovedenem updatu,
+        EAGAIN...). Bez tohohle by umrel start_all nebo hlidac a zbyle mapy
+        by se uz nikdy nespustily - bez jedineho radku v konzoli.
+        """
+        try:
+            server.start(self.rates())
+            return True
+        except Exception as exc:  # noqa: BLE001 - vlakno nesmi umrit
+            emit(server.name, f"CHYBA: start selhal: {exc}")
+            return False
+
     def start_all(self):
         preset = self.state.apply_pending()
-        write_shared_config(self.cfg, self.presets, preset)
+        try:
+            write_shared_config(self.cfg, self.presets, preset)
+        except OSError as exc:
+            log(f"CHYBA: konfiguraci nejde pripravit: {exc}")
         log(f"Startuji {len(self.maps)} map, preset '{preset}', "
             f"prodleva {self.cfg.start_delay} s mezi mapami")
         for position, server in enumerate(self.maps.values()):
+            # Poradi zamku vsude stejne: lifecycle -> zamek mapy.
             with self.lifecycle:
                 if self.stopping.is_set():
                     return
-                server.start(self.rates())
+                started = self._safe_start(server)
             # wait_ready zamerne MIMO zamek - blokuje az ready_timeout a
             # nesmi tim drzet pripadne vypinani.
-            server.wait_ready(self.cfg.ready_timeout)
+            if started:
+                server.wait_ready(self.cfg.ready_timeout)
             # Prodleva az mezi mapami, ne po posledni.
             if position < len(self.maps) - 1 and self.cfg.start_delay:
                 log(f"cekam {self.cfg.start_delay} s pred dalsi mapou")
@@ -599,9 +855,19 @@ class Supervisor:
         log("vsechny mapy nastartovany")
 
     def stop_all(self):
-        if self.stopping.is_set():
+        """Ukonci cluster. Idempotentni: dalsi volajici pocka na dokonceni."""
+        with self._stop_claim:
+            first = not self.stopping.is_set()
+            self.stopping.set()
+        if not first:
+            self.stopped.wait()
             return
-        self.stopping.set()
+        try:
+            self._stop_all()
+        finally:
+            self.stopped.set()
+
+    def _stop_all(self):
         # Sekvencne by 13 map trvalo nekolikanasobek App.ExitTimeout, AMP by
         # poslalo SIGKILL uprostred a zbytek map by zustal neulozeny a bezici.
         # Paralelne je cena maximum z map, ne soucet.
@@ -619,18 +885,20 @@ class Supervisor:
             log("cekam, az se dokonci rozbehnuty start")
             self.startup.join(timeout=30)
 
+        # Rozpocet bezi od chvile, kdy vypinani opravdu zacina.
+        deadline = time.time() + budget
         # Zamek zabrani tomu, aby start_all/hlidac spustil mapu za nami.
         with self.lifecycle:
             threads = []
             for server in self.maps.values():
                 t = threading.Thread(
                     target=server.stop,
-                    args=(self.fixes_for(server.name), self.cfg.save_timeout),
+                    args=(self.fixes_for(server.name), self.cfg.save_timeout,
+                          deadline),
                     daemon=True)
                 t.start()
                 threads.append(t)
 
-        deadline = time.time() + budget
         for t in threads:
             t.join(timeout=max(0, deadline - time.time()))
 
@@ -650,20 +918,29 @@ class Supervisor:
         log("cluster ukoncen" + (f" - ZBYLY PROCESY: {left}" if left else ""))
 
     def restart_map(self, server):
-        with server._lock:
-            with self.lifecycle:
-                if self.stopping.is_set():
-                    return
-                server.stop(self.fixes_for(server.name), self.cfg.save_timeout)
-                preset = self.state.apply_pending()
-                write_shared_config(self.cfg, self.presets, preset)
-                if self.stopping.is_set():
-                    return
-                server.restarts = 0
-                server.start(self.rates())
-        server.wait_ready(self.cfg.ready_timeout)
+        # Stop BEZ lifecycle: trva i minuty (uklid s rozestupy, SIGINT) a
+        # nesmi tim blokovat vypinani clusteru ani hlidace.
+        if self.stopping.is_set():
+            return
+        server.stop(self.fixes_for(server.name), self.cfg.save_timeout)
+        preset = self.state.apply_pending()
+        try:
+            write_shared_config(self.cfg, self.presets, preset)
+        except OSError as exc:
+            log(f"CHYBA: konfiguraci nejde pripravit: {exc}")
+        with self.lifecycle:
+            if self.stopping.is_set():
+                return
+            server.restarts = 0
+            started = self._safe_start(server)
+        if started:
+            server.wait_ready(self.cfg.ready_timeout)
 
     # --- smycky na pozadi ---
+
+    # Mapa, ktera pred padem bezela aspon tak dlouho, dostane hlidace zpet
+    # s plnym poctem pokusu - pet padu za tydny neni smycka padu.
+    STABLE_UPTIME = 3600
 
     def watchdog_loop(self):
         while not self.stopping.wait(30):
@@ -675,32 +952,39 @@ class Supervisor:
                 # desired_up: mapu zastavenou obsluhou hlidac NESMI zvedat.
                 if not server.desired_up or server.proc is None or server.running:
                     continue
+                if time.time() - server.started_at > self.STABLE_UPTIME:
+                    server.restarts = 0
                 if server.restarts >= self.MAX_RESTARTS:
+                    if not server.gave_up:
+                        server.gave_up = True
+                        emit(server.name, f"CHYBA: {self.MAX_RESTARTS} padu po sobe, "
+                                          f"hlidac to vzdava - 'start {server.name}' rucne")
                     continue
-                # Neblokujici - kdyz uz s mapou nekdo manipuluje, pristi kolo.
-                if not server._lock.acquire(blocking=False):
-                    continue
-                try:
-                    if server.running or not server.desired_up:
+                started = False
+                # Poradi zamku vsude stejne: lifecycle -> zamek mapy.
+                with self.lifecycle:
+                    if self.stopping.is_set():
+                        return
+                    # Neblokujici - kdyz uz s mapou nekdo manipuluje, pristi kolo.
+                    if not server._lock.acquire(blocking=False):
                         continue
-                    with self.lifecycle:
-                        if self.stopping.is_set():
-                            return
+                    try:
+                        if server.running or not server.desired_up:
+                            continue
                         server.restarts += 1
                         emit(server.name, f"spadla, restart {server.restarts}/"
                                           f"{self.MAX_RESTARTS}")
-                        server.start(self.rates())
-                finally:
-                    server._lock.release()
-                server.wait_ready(self.cfg.ready_timeout)
+                        started = self._safe_start(server)
+                    finally:
+                        server._lock.release()
+                if started:
+                    server.wait_ready(self.cfg.ready_timeout)
 
     def chat_loop(self):
-        """Preposila chat mezi mapami. Nahrazuje Cross-Ark-Chat."""
+        """Chat z map do konzole AMP; s CrossChat i mezi mapami (misto Cross-Ark-Chat)."""
         while not self.stopping.wait(5):
-            if not self.cfg.cross_chat or self.quiesced:
-                continue
             for server in self.maps.values():
-                if not server.ready or not server.running:
+                if not server.running or not server.probe_ready():
                     continue
                 try:
                     chat = server.rcon.command("GetChat")
@@ -725,7 +1009,10 @@ class Supervisor:
         if not match:
             return
         _steam, player, message = match.groups()
+        # Do konzole AMP vzdy - na tenhle radek cili Console.UserChatRegex.
         emit(origin.name, f"<{player}> {message}")
+        if not self.cfg.cross_chat:
+            return
         payload = f"{RELAY_MARK}[{origin.name}] {player}: {message}"
         for server in self.maps.values():
             if server is origin or not server.ready or not server.running:
@@ -736,11 +1023,68 @@ class Supervisor:
                 pass
 
     def metrics_loop(self):
+        # AMP meri jen proces supervisoru (App.MonitorChildProcess umi jedno
+        # dite, ne 13), takze jeho grafy CPU a RAM by ukazovaly skoro nulu.
+        # Soucet za mapy si proto supervisor meri sam a posila ho v METRICS.
+        tick = os.sysconf("SC_CLK_TCK")
+        last = {}                            # pid -> (tiky, cas)
         while not self.stopping.wait(60):
-            up = sum(1 for s in self.maps.values() if s.running)
+            up, rss_kb, cpu = 0, 0, 0.0
+            now = time.time()
+            seen = {}
+            for server in self.maps.values():
+                if not server.running:
+                    continue
+                up += 1
+                pid = server.proc.pid
+                rss_kb += proc_rss_kb(pid)
+                ticks = proc_cpu_ticks(pid)
+                if ticks is None:
+                    continue
+                seen[pid] = (ticks, now)
+                if pid in last and now > last[pid][1]:
+                    cpu += (ticks - last[pid][0]) / tick / (now - last[pid][1])
+            last = seen
             players = sum(len(s.players) for s in self.maps.values())
             # Na tenhle radek cili Console.MetricsRegex - z toho jsou grafy v AMP.
-            emit("supervisor", f"METRICS maps_up={up} players={players}")
+            emit("supervisor", f"METRICS maps_up={up} players={players} "
+                               f"ram_gb={rss_kb / 1048576:.1f} cpu_cores={cpu:.1f}")
+
+    def players_loop(self):
+        """Seznam hracu z RCON ListPlayers.
+
+        Server herni log na stdout nepise, takze join/leave odtamtud nejdou.
+        ListPlayers navic dava ID, ktere KickPlayer/BanPlayer potrebuji -
+        jmeno nestaci. Na tenhle vystup ciluji Console.UserJoinRegex a
+        UserLeaveRegex v sablone.
+        """
+        while not self.stopping.wait(15):
+            for server in self.maps.values():
+                if self.stopping.is_set():
+                    return
+                if not server.running:
+                    # Spadla nebo zastavena mapa - hraci na ni nejsou.
+                    if server.players:
+                        self._diff_players(server, {})
+                    continue
+                try:
+                    now = parse_players(server.rcon.command("ListPlayers", timeout=5))
+                except (RconError, OSError):
+                    server.ready = False
+                    continue          # stav nevime - seznam nemenit
+                # Mapa nabehla podle logu, ale RCON se overuje az tady - bez
+                # toho by ready zustalo False a chat ani hraci by se nerozjeli.
+                server.ready, server._ready_at = True, time.time()
+                self._diff_players(server, now)
+
+    @staticmethod
+    def _diff_players(server, now):
+        before = server.players
+        for pid in now.keys() - before.keys():
+            emit(server.name, f">>> {now[pid]} ({pid}) joined this ARK!")
+        for pid in before.keys() - now.keys():
+            emit(server.name, f"<<< {before[pid]} ({pid}) left this ARK!")
+        server.players = now
 
     # --- prikazy z konzole AMP ---
 
@@ -813,13 +1157,13 @@ class Supervisor:
         elif cmd == "rconall" and rest:
             self.cmd_all_rcon(rest)
         elif cmd == "saveall":
-            self.cmd_all_rcon("cheat SaveWorld")
+            # Velky svet se uklada i desitky sekund - 10 s by ho ohlasilo
+            # jako chybu a zavrelo spojeni uprostred.
+            self.cmd_all_rcon("SaveWorld", timeout=120)
         elif cmd in ("kick", "ban") and args:
             self.cmd_moderate(cmd, args[0])
         elif cmd == "whereis" and args:
             self.cmd_whereis(args[0])
-        elif cmd == "verifyfixes":
-            self.cmd_verify_fixes(args[0] if args else None)
         elif cmd == "event":
             self.cmd_event(args)
         elif cmd == "quiesce":
@@ -837,12 +1181,11 @@ class Supervisor:
             "broadcast <zprava>    na vsechny mapy",
             "say <mapa> <zprava>",
             "rcon <mapa> <prikaz>  |  rconall <prikaz>",
-            "saveall               SaveWorld na vsech mapach",
+            "saveall               SaveWorld vsude (muze RCON map na minuty umlcet)",
             "kick|ban <hrac>       supervisor mapu dohleda sam",
             "whereis <hrac>",
-            "verifyfixes [mapa]    over nazvy trid v mapfixes.json pres GetAll",
             "event list|status|set <preset>|apply",
-            "quiesce | dequiesce   pauza zapisu pro zalohu za behu",
+            "quiesce | dequiesce   zaloha za behu z AMP (save je atomicky)",
             "DoExit                korektni ukonceni celeho clusteru",
         ]:
             log("  " + line)
@@ -860,15 +1203,18 @@ class Supervisor:
             else:
                 state, pid = "STOJI", "-"      # zastavena zamerne
             cores = sorted(server.cores) if server.cores else "-"
+            ram = (f"{proc_rss_kb(server.proc.pid) / 1048576:.1f}G"
+                   if server.running else "-")
             log(f"  {server.name:<16} {state:<9} pid={pid:<8} "
-                f"game={server.ports['game']} hracu={len(server.players)} cpu={cores}")
+                f"game={server.ports['game']} hracu={len(server.players)} "
+                f"ram={ram} cpu={cores}")
 
     def cmd_players(self):
         total = 0
         for server in self.maps.values():
             if not server.running:
                 continue
-            names = sorted(server.players)
+            names = sorted(server.players.values())
             total += len(names)
             log(f"  {server.name:<16} {len(names):>3}  "
                 f"{', '.join(names) if names else '-'}")
@@ -876,11 +1222,19 @@ class Supervisor:
 
     def _start_one(self, name):
         server = self.find(name)
-        if server:
+        if not server:
+            return
+        with self.lifecycle:
+            # Bez teto kontroly by se mapa spustila za zady stop_all a
+            # prezila supervisor (os._exit deti nezabiji).
+            if self.stopping.is_set():
+                log("cluster se vypina, start neprovedeny")
+                return
             # Rucni start znovu otevre rozpocet restartu, jinak by pet
             # rucnich cyklu nechalo mapu bez ochrany proti padu.
             server.restarts = 0
-            server.start(self.rates())
+            started = self._safe_start(server)
+        if started:
             server.wait_ready(self.cfg.ready_timeout)
 
     def _stop_one(self, name):
@@ -902,44 +1256,54 @@ class Supervisor:
         except (RconError, OSError) as exc:
             emit(server.name, f"RCON selhalo: {exc}")
 
-    def cmd_all_rcon(self, command, quiet=False):
+    def cmd_all_rcon(self, command, quiet=False, timeout=None):
         for server in self.maps.values():
-            if not server.running or not server.probe_ready():
+            if not server.running:
+                continue
+            if not server.probe_ready():
+                emit(server.name, f"RCON neodpovida, '{command}' neodeslano")
                 continue
             try:
-                reply = server.rcon.command(command)
+                reply = server.rcon.command(command, timeout=timeout)
                 if not quiet:
                     emit(server.name, reply or "(prazdna odpoved)")
             except (RconError, OSError) as exc:
                 emit(server.name, f"RCON selhalo: {exc}")
 
-    def _locate(self, player):
-        needle = player.lower()
+    def _locate(self, who):
+        """Hrac podle ID (presne) nebo jmena (i cast). -> (mapa, id, jmeno)."""
         for server in self.maps.values():
-            # tuple() je v CPythonu atomicky - iterovat primo pres mnozinu,
-            # kterou meni vlakno ctouci vystup mapy, hazi RuntimeError.
-            for known in tuple(server.players):
-                low = known.lower()
+            players = server.players
+            if who in players:
+                return server, who, players[who]
+        needle = who.lower()
+        for server in self.maps.values():
+            for pid, name in server.players.items():
+                low = name.lower()
                 if low == needle or needle in low:
-                    return server, known
-        return None, None
+                    return server, pid, name
+        return None, None, None
 
-    def cmd_whereis(self, player):
-        server, known = self._locate(player)
+    def cmd_whereis(self, who):
+        server, pid, name = self._locate(who)
         if server:
-            log(f"{known} je na mape {server.name}")
+            log(f"{name} ({pid}) je na mape {server.name}")
         else:
-            log(f"hrac '{player}' nenalezen na zadne mape")
+            log(f"hrac '{who}' nenalezen na zadne mape")
 
-    def cmd_moderate(self, action, player):
-        """kick/ban z tlacitka v AMP - supervisor mapu dohleda sam."""
-        server, known = self._locate(player)
+    def cmd_moderate(self, action, who):
+        """kick/ban z tlacitka v AMP - supervisor mapu dohleda sam.
+
+        KickPlayer/BanPlayer chteji ID hrace, ne jmeno - proto ListPlayers.
+        """
+        server, pid, name = self._locate(who)
         if not server:
-            log(f"hrac '{player}' nenalezen, {action} neprovedeno")
+            log(f"hrac '{who}' nenalezen, {action} neprovedeno")
             return
-        command = f"KickPlayer {known}" if action == "kick" else f"BanPlayer {known}"
+        command = f"KickPlayer {pid}" if action == "kick" else f"BanPlayer {pid}"
         try:
-            emit(server.name, f"{action}: {server.rcon.command(command) or 'OK'}")
+            emit(server.name, f"{action} {name} ({pid}): "
+                              f"{server.rcon.command(command) or 'odeslano'}")
         except (RconError, OSError) as exc:
             emit(server.name, f"{action} selhalo: {exc}")
 
@@ -984,50 +1348,18 @@ class Supervisor:
         finally:
             self._rolling_lock.release()
 
-    def cmd_verify_fixes(self, name=None):
-        """Over, ze tridy v mapfixes.json na mape opravdu existuji.
-
-        DestroyAll nevraci nic ani pri uspechu, ani pri preklepu, takze log
-        sam o sobe nic nedokazuje. GetAll je jediny zpusob, jak zjistit, jestli
-        nazev tridy neco znamena.
-        """
-        targets = [self.find(name)] if name else list(self.maps.values())
-        for server in targets:
-            if not server or not server.running or not server.probe_ready():
-                continue
-            entry = self.fixes.get(server.name) or self.fixes.get("_default") or {}
-            cmds = (list(entry.get("safe", [])) + list(entry.get("destructive", []))
-                    if isinstance(entry, dict) else list(entry))
-            for cmd in cmds:
-                parts = cmd.split()
-                if len(parts) < 3 or parts[1].lower() != "destroyall":
-                    continue
-                cls = parts[2]
-                try:
-                    reply = server.rcon.command(f"cheat GetAll {cls}")
-                except (RconError, OSError) as exc:
-                    emit(server.name, f"GetAll {cls} selhalo: {exc}")
-                    continue
-                count = len([l for l in reply.splitlines() if l.strip()])
-                if count:
-                    emit(server.name, f"OK    {cls}: {count} vyskytu")
-                else:
-                    emit(server.name, f"NULA  {cls}: nic nenalezeno - bud je "
-                                      f"mapa cista, nebo je nazev tridy spatne")
-
     def cmd_quiesce(self, on):
-        """Umozni zalohu bez vypnuti serveru.
+        """Zaloha za behu - AMP vola pres App.QuiesceCommand misto vypnuti.
 
-        AMP tohle vola pres App.QuiesceCommand - doted to umel jen Minecraft,
-        protoze slo o dvojici prikazu do konzole. Nasi konzoli pisem my.
+        Zamerne BEZ SaveWorld. ARK save zapisuje atomicky (.ark dostane novy
+        inode naraz, rozepsany soubor nikdy neexistuje - overeno na v361.7),
+        takze kopie za behu je vzdy cely soubor, nanejvys o autosave starsi.
+        RCON SaveWorld by naopak mohl RCON map na minuty umlcet (viz README).
+        Prikaz tu je kvuli tomu, ze s nim AMP zalohuje bez vypnuti clusteru.
         """
-        if on:
-            self.cmd_all_rcon("cheat SaveWorld", quiet=True)
-            self.quiesced = True
-            log("QUIESCED - svety ulozeny, zaloha muze bezet")
-        else:
-            self.quiesced = False
-            log("DEQUIESCED - normalni provoz")
+        self.quiesced = on
+        log("QUIESCED - save se zapisuje atomicky, zaloha muze bezet"
+            if on else "DEQUIESCED - normalni provoz")
 
 
 # --------------------------------------------------------------------------
@@ -1036,6 +1368,16 @@ class Supervisor:
 
 def main():
     cfg = Config()
+
+    # ARK po kazdem korektnim vypnuti (SIGINT) uz po ulozeni spadne na
+    # SIGABRT (overeno 3/3 na v361.7). Bez tohohle by kazdy restart mapy
+    # nechal core dump o velikosti jeji RAM - pres systemd-coredump ~1,3 GB,
+    # jako soubor 'core' v adresari serveru ~6 GB. Mapy limit zdedi.
+    try:
+        _, hard = resource.getrlimit(resource.RLIMIT_CORE)
+        resource.setrlimit(resource.RLIMIT_CORE, (0, hard))
+    except (ValueError, OSError):
+        pass
 
     selected, unknown = [], []
     for arg in sys.argv[1:]:
@@ -1057,11 +1399,14 @@ def main():
     if not cfg.binary.exists():
         log(f"CHYBA: server nenalezen na {cfg.binary}. Spust nejdriv Update.")
         return 1
-    if not cfg.rcon_password:
-        log("CHYBA: neni nastavene RCON heslo. Bez nej supervisor mapy neovlada "
-            "- doplnit v nastaveni instance (RCON Password).")
-        return 1
-
+    for label, value in (("RCON Password", cfg.rcon_password),
+                         ("Server Password", cfg.server_password)):
+        if value and ("?" in value or any(ch.isspace() for ch in value)):
+            # ARK prikazovou radku u mezery utne a zbytek tise zahodi - server
+            # by mohl bezet bez hesla a bez jmena. Radsi nespustit vubec.
+            log(f"CHYBA: {label} obsahuje mezeru nebo '?' - zmen ho v nastaveni "
+                f"instance. ARK by prikazovou radku u nej utnul.")
+            return 1
     # Kanonicke poradi, ne poradi argumentu - porty musi sedet s ports.json.
     selected.sort(key=CANONICAL_MAPS.index)
     supervisor = Supervisor(cfg, selected)
@@ -1094,7 +1439,7 @@ def main():
     supervisor.startup = threading.Thread(target=supervisor.start_all, daemon=True)
     supervisor.startup.start()
     for loop in (supervisor.watchdog_loop, supervisor.chat_loop,
-                 supervisor.metrics_loop):
+                 supervisor.metrics_loop, supervisor.players_loop):
         threading.Thread(target=loop, daemon=True).start()
 
     try:
@@ -1117,9 +1462,12 @@ def main():
     # rozjety start.
     if not supervisor.stopping.is_set():
         log("stdin uzavren, ukoncuji cluster")
+    # Pri soubeznem signalu pocka, az vypinani dobehne (stop_all je
+    # idempotentni), a pak konec natvrdo: shutdown_worker neni daemon a
+    # ceka na signal, ktery na teto ceste (DoExit z AMP, EOF) neprijde.
     supervisor.stop_all()
     sys.stdout.flush()
-    return 0
+    os._exit(0)
 
 
 if __name__ == "__main__":

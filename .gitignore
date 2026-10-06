@@ -9,3 +9,25 @@ logs/
 clusterdata/
 srv/
 supervisor-state.json
+supervisor-state.tmp
+
+# SteamCMD - AMP ho instaluje do RootDir, ktery je zaroven git stromem
+# supervisoru. Ignorovane soubory git pri checkout/pull prepise bez protestu;
+# neignorovane by pri kolizi s novym souborem v repu update zastavily.
+# Ukotvene ke koreni - holy "config/" by schoval i supervisor/config/.
+/steamcmd.sh
+/steam.sh
+/steamcmd/
+/linux32/
+/linux64/
+/ubuntu12_32/
+/ubuntu12_64/
+/package/
+/public/
+/siteserverui/
+/steamapps/
+/appcache/
+/config/
+/depotcache/
+/userdata/
+/Steam/

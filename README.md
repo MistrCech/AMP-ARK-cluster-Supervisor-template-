@@ -12,12 +12,18 @@ mezi nimi postupně rozejde.
 - **13 map z jedné instalace** — ~15 GB místo ~195 GB, jeden SteamCMD zápis při updatu
 - **Ovládání po mapách zůstává** — konzole AMP je příkazový kanál (`AdminMethod=STDIO`)
 - **Postupný start** s prodlevou; 13 serverů naráz stroj neustojí
-- **CPU pinning** — každá mapa vlastní fyzické jádro včetně SMT sourozence
+- **CPU pinning** — každá mapa vlastní fyzické jádro včetně SMT sourozence (když je
+  map víc než volných jader, dělí se a supervisor to ohlásí)
 - **Cross-server chat** — nahrazuje Cross-Ark-Chat, bez druhého procesu
 - **Evolution eventy** (2×/4×) — přepnou se při nejbližším restartu
 - **Restartové fixy per mapa** — `DestroyWildDinos`, úly, hnízda, vejce
-- **Zálohy za běhu** — `quiesce`/`dequiesce`, doteď to uměl jen Minecraft
-- **Seznam hráčů, chat a kick/ban tlačítka** v UI AMP
+- **Zálohy za běhu** — `quiesce`/`dequiesce`: AMP zálohuje bez vypnutí clusteru
+  (ARK zapisuje save atomicky, viz níže; záloha je nanejvýš o autosave starší)
+- **Seznam hráčů, chat a kick/ban tlačítka** v UI AMP — hráči z RCON `ListPlayers`
+  i s ID, které kick/ban potřebují
+- **Log každé mapy v konzoli AMP** — start, savy, chyby; řádek s hesly se nepouští
+- **Korektní vypnutí** — úklid + SIGINT (ARK při něm uloží), bez core dumpů
+- **Grafy v AMP** — mapy, hráči, RAM a CPU celého clusteru (AMP sám měří jen supervisor)
 
 ## Instalace
 
@@ -28,15 +34,20 @@ MistrCech/AMP-ARK-cluster-Supervisor-template-:main      produkce
 MistrCech/AMP-ARK-cluster-Supervisor-template-:staging   testovani
 ```
 
-Na hostiteli musí být **systémový Python** verze zadané v nastavení instance
-(výchozí 3.11) — z něj se staví venv:
+Hostitel musí být **Linux** a mít **systémový `python3`** (aspoň 3.7) a `git`.
+Supervisor běží na čisté standardní knihovně, takže žádný venv ani pip — stačí
+Python, který na Debianu i Ubuntu je (Debian 13 má 3.13, Ubuntu 24.04 má 3.12).
+Update to ověří v kroku *Python Check*. V kontejneru je obojí už v obrazu
+`cubecoders/ampbase:debian`.
 
 ```bash
-sudo apt install python3.11 python3.11-venv     # Debian/Ubuntu
+sudo apt install python3 git     # Debian/Ubuntu, pokud chybí
 ```
 
 Pak vytvoř instanci ze šablony **ARK: Survival Evolved (Cluster)**, zaškrtni mapy
-v sekci *Maps*, **nastav RCON heslo** (bez něj supervisor mapy neovládá) a spusť Update.
+v sekci *Maps* a spusť Update. RCON heslo můžeš nechat prázdné — supervisor si při
+prvním startu vygeneruje vlastní a uloží ho do `supervisor-state.json` (práva 600),
+kde ho najdeš pro externí RCON nástroje.
 
 ## Příkazy v konzoli
 
@@ -47,12 +58,11 @@ start|stop|restart <mapa>
 broadcast <zprava>    na vsechny mapy
 say <mapa> <zprava>
 rcon <mapa> <prikaz>  |  rconall <prikaz>
-saveall
-kick|ban <hrac>       supervisor mapu dohleda sam
-whereis <hrac>
-verifyfixes [mapa]    over nazvy trid v mapfixes.json pres GetAll
+saveall               SaveWorld vsude (muze RCON map na minuty umlcet)
+kick|ban <hrac|id>    supervisor mapu dohleda sam
+whereis <hrac|id>
 event list|status|set <preset>|apply
-quiesce | dequiesce
+quiesce | dequiesce   zaloha za behu z AMP (save je atomicky)
 DoExit                korektni ukonceni celeho clusteru
 ```
 
@@ -80,8 +90,9 @@ Ověřeno proti tabulkám oficiální wiki: v `[ServerSettings]` se `CMD=yes` js
 opravdu jen ty tři. Tabulka Game.ini **nemá sloupec CMD vůbec**, takže cokoli
 odtud předané přes `?` se tiše zahodí a event by breeding nezměnil.
 
-Proto supervisor `Game.ini` **generuje** ze šablony v tomhle repu a pak ho zamkne
-na `chmod 444`. ARK si ten soubor jinak při vypnutí přepisuje vlastními hodnotami.
+Proto supervisor `Game.ini` **generuje** ze šablony v tomhle repu při startu
+clusteru a při každém restartu mapy (`restart`, `event apply`) a zamyká na
+`chmod 444` (ve všech testech ho ARK nechal netknutý).
 
 **Pozor na směr:** intervalové hodnoty se **snižují**. Napsat u „4×" všude `4.0`
 by breeding čtyřnásobně *zpomalilo*.
@@ -93,9 +104,14 @@ Konfigurace je generovaná — needituj ji v instanci, přepíše se. Uprav mís
 | soubor | co |
 |---|---|
 | `supervisor/config/Game.ini.template` | stackování, zakázané spawny, rates |
-| `supervisor/config/GameUserSettings.ini.template` | základní nastavení serveru |
+| `supervisor/config/ServerSettings.ini` | `[ServerSettings]` — jde na **příkazovou řádku** každé mapy |
 | `supervisor/presets.json` | násobky eventů |
 | `supervisor/mapfixes.json` | úklid před vypnutím, per mapa (`safe` / `destructive`) |
+
+`GameUserSettings.ini` supervisor **negeneruje**: ručně napsaný ARK celý zahodí a
+vytvoří znovu s výchozími hodnotami (ověřeno — stackování ×10 se tak na server
+nikdy nedostalo). Klíče `[ServerSettings]` proto jdou na příkazovou řádku, kde je
+ARK převezme. Smí tam jen klíče se sloupcem CMD na wiki a hodnoty bez mezer.
 
 ### Stackování
 
@@ -110,7 +126,9 @@ nefunguje — ověř ve hře, ne jen v souboru.
 hromadí právě tehdy, když se ten příkaz pouští často.
 
 Úklid běží **před** vypnutím mapy, aby repopulace (5–10 min) proběhla při bootu,
-kdy nikdo nehraje.
+kdy nikdo nehraje. Mezi příkazy je **45 s rozestup** — těžký příkaz poslaný pár
+sekund po jiném ARK nevezme a RCON pak minuty mlčí; s rozestupem prošly všechny
+(ověřeno). Mapa se třemi příkazy se tak vypíná ~1,5 minuty, mapy paralelně.
 
 Úklid je rozdělený na dvě skupiny:
 
@@ -123,12 +141,50 @@ kdy nikdo nehraje.
 
 **`DestroyAll` nevrací žádný výstup** — ani při úspěchu, ani při překlepu v názvu
 třídy. Log tedy dokazuje jen to, že příkaz dorazil na server. Novou třídu ověř
-příkazem `verifyfixes`, který pro každou třídu pošle `GetAll` a spočítá výskyty.
+**ve hře** v admin konzoli klienta (`cheat GetAll <Třída>`), než ji přidáš. Přes
+RCON to nejde, `GetAll` tam nevrací nic. Příkazy v `mapfixes.json` jsou **bez**
+prefixu `cheat` — ten RCON potvrdí, ale příkaz neprovede (ověřeno na v361.7).
 
 Ledové wyverny jsou v šabloně **zakomentované**, a to ve variantě, která je
 **nahradí** normální wyvernou místo aby je zrušila — hnízdní místa tak zůstanou
 obsazená. Pozor: `Ragnarok_Wyvern_Override_Ice_C` používá **i Valguero**, a
 `Game.ini` je sdílený, takže odkomentování zasáhne obě mapy.
+
+## Co ARK (v361.7) dělá jinak, než by člověk čekal
+
+Ověřeno na skutečném serveru, ne odvozeno — z toho vychází návrh supervisoru:
+
+- **Příkazovou řádku utne u první mezery** a všechno za ní tiše zahodí. S
+  `SessionName="… - Mapa"` uprostřed zmizelo i `ServerPassword` — server byl
+  veřejný. Jméno proto jde **poslední** a bez uvozovek.
+- **Hesla musí na příkazovou řádku.** Bez `ServerAdminPassword` se RCON port
+  vůbec neotevře a `ServerPassword` jen z ini nechá server veřejný. Každý lokální
+  uživatel je tak vidí v `/proc/*/cmdline` (obrana: `/proc` s `hidepid=2`).
+- **Na stdout nepíše herní log** — jen dva řádky ze Steam API. Proto
+  `-log=<Mapa>.log -forcelogflush` a supervisor ten soubor posílá do konzole.
+- **RCON posílá každých 10 s `Keep Alive`** — timeout musí být na celou odpověď,
+  ne na jeden `recv`, jinak čekání nikdy neskončí.
+- **Prefix `cheat` RCON potvrdí, ale příkaz neprovede.** `GetAll` přes RCON
+  nevrací nic.
+- **SIGINT i RCON `DoExit` svět uloží a server do pár sekund ukončí — a hned
+  potom spadne na SIGABRT** (pokaždé). Core dump by měl velikost RAM mapy, proto
+  ho supervisor vypíná. K vypnutí používá SIGINT, protože funguje i tehdy, když
+  RCON zrovna neodpovídá.
+- **Save se zapisuje atomicky** — `.ark` dostane nový inode naráz, rozepsaný
+  soubor nikdy neexistuje. Kopie za běhu je vždy celý soubor.
+- **Po RCON `SaveWorld` (a jiných těžkých příkazech) RCON mapy občas na minuty
+  ztichne** — nejen první mapy, i ostatních. Nepravidelné: v klidu prošly dva
+  `SaveWorld` 40 s po sobě, na zatíženém stroji se RCON po rychlém druhém savu
+  zastavil na obou mapách. Vše ukazuje na těžký příkaz krátce po jiném těžkém
+  příkazu — s rozestupem 40–45 s prošly všechny (úklid ho proto má). Supervisor
+  proto na RCON nestaví nic kritického: připravenost bere z logu, vypíná
+  SIGINTem a quiesce `SaveWorld` neposílá.
+- **Vyhladovělý server přestane obsluhovat i signály.** Se sníženou prioritou
+  (`nice 19`, `CPUWeight=1`) a pinningem na zatížená jádra jednou nezareagoval
+  ani na SIGINT. Mapy nespouštěj se sníženou prioritou.
+- **S pinningem vidí UE jedno jádro** (`Number of cores 1` v logu) a podle toho
+  dimenzuje pracovní vlákna. S pinningem startuje TheIsland ~40 s; srovnání bez
+  pinningu a dopad na tick při hráčích zatím změřené nejsou.
 
 ## Porty
 
