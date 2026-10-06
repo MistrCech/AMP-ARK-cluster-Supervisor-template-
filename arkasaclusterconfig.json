@@ -332,6 +332,51 @@
         }
     },
     {
+        "DisplayName": "Discord Bot Token",
+        "Category": "ARK Cluster:hub",
+        "Subcategory": "Cluster:group:3",
+        "Description": "Token bota pro most chatu do kanalu na Discordu (Developer Portal -> aplikace -> Bot -> Reset Token). Ne Public Key - ten na zpravy nestaci. Prazdne = most vypnuty.",
+        "Keywords": "discord,bot,token,chat",
+        "FieldName": "DiscordToken",
+        "InputType": "Password",
+        "IsFlagArgument": false,
+        "ParamFieldName": "DiscordToken",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "Discord Channel ID",
+        "Category": "ARK Cluster:hub",
+        "Subcategory": "Cluster:group:3",
+        "Description": "Cislo kanalu, kam jde chat ze hry (Discord: Nastaveni -> Pokrocile -> Rezim vyvojare, pak pravym na kanal -> Kopirovat ID kanalu). Bot v nem potrebuje Zobrazit kanal, Posilat zpravy a Cist historii zprav.",
+        "Keywords": "discord,channel,chat",
+        "FieldName": "DiscordChannel",
+        "InputType": "text",
+        "IsFlagArgument": false,
+        "ParamFieldName": "DiscordChannel",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "Discord -> Game Chat",
+        "Category": "ARK Cluster:hub",
+        "Subcategory": "Cluster:group:3",
+        "Description": "Zpravy z kanalu na Discordu posilat do hry na vsechny mapy (bez diakritiky - ARK pres RCON vic neumi). Chce u bota zapnuty Message Content Intent (Developer Portal -> Bot).",
+        "Keywords": "discord,chat,relay",
+        "FieldName": "DiscordToGame",
+        "InputType": "checkbox",
+        "IsFlagArgument": false,
+        "ParamFieldName": "DiscordToGame",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "1",
+        "EnumValues": {
+            "False": "",
+            "True": "1"
+        }
+    },
+    {
         "DisplayName": "Rate Preset",
         "Category": "ARK Cluster:hub",
         "Subcategory": "Events:date_range:4",

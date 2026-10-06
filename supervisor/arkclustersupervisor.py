@@ -11,6 +11,7 @@ Prikazy prijima na stdin - tim je konzole AMP zaroven ovladacim panelem.
 import configparser
 import json
 import os
+import queue
 import re
 import secrets
 import shlex
@@ -23,6 +24,7 @@ import time
 import unicodedata
 from pathlib import Path
 
+from discordbridge import DiscordBridge, escape_markdown
 from rcon import RconClient, RconError, RconTimeout
 
 IS_WINDOWS = os.name == "nt"
@@ -56,6 +58,9 @@ GAMES = {
         # Konec odpovedi RCON znaci odpoved na prazdny paket - viz rcon.py.
         # Jen linuxovy build, Windows viz vyse.
         "rcon_terminator": True,
+        # Odkud brat chat hracu: "rcon" = GetChat kazdych 5 s, "log" = radky
+        # chatu z logu mapy (UTF-8, okamzite). Viz chat_loop.
+        "chat_source": "rcon",
     },
     "asa": {
         "app_dir": "2430930",
@@ -73,6 +78,10 @@ GAMES = {
         "started_re": r"^Server has completed startup and is now advertising for join",
         # ASA na prazdny paket neodpovi a spojeni pak mlci uplne - viz rcon.py.
         "rcon_terminator": False,
+        # ASA pise chat i do logu, v UTF-8 - GetChat vraci kodovou stranku
+        # systemu (cp1252: z c, r, e s hackem '?'). Prepnout na "log", az bude
+        # overeno, ze tam neni tribe chat - jinak by sel vsem a na Discord.
+        "chat_source": "rcon",
     },
 }
 GAME = (os.environ.get("ARK_GAME") or "ase").strip().lower()
@@ -90,16 +99,63 @@ STATE_FILE = HERE.parent / "supervisor-state.json"
 
 
 
+# Ceske uvozovky a pomlcky NFKD na ASCII nerozlozi - bez tohohle by z nich byl '?'.
+_CHAT_PUNCT = str.maketrans({"\u201e": '"', "\u201c": '"', "\u201d": '"', "\u00ab": '"',
+                             "\u00bb": '"', "\u201a": "'", "\u2018": "'", "\u2019": "'",
+                             "\u2013": "-", "\u2014": "-"})
+
+
 def chat_text(text):
     """Text pro ServerChat/Broadcast jen v ASCII.
 
     ARK prikaz z RCON neprekodovava - kazdy bajt nad 127 vezme jako znak se
     znamenkem, takze z UTF-8 'r' s hackem (C5 99) je ve hre U+FFC5 U+FF99
     (overeno v94.15). Zadne kodovani tudy neprojde; bez hacku a carek je text
-    aspon citelny ('Prilis zlutoucky kun'), jine pismo jde na '?'.
+    aspon citelny ('Prilis zlutoucky kun'). Emoji a neviditelne znaky
+    (z Discordu) zmizi, jine pismo jde na '?'.
     """
-    return "".join(ch if ord(ch) < 128 else ("" if unicodedata.combining(ch) else "?")
-                   for ch in unicodedata.normalize("NFKD", text))
+    out = []
+    for ch in unicodedata.normalize("NFKD", text.translate(_CHAT_PUNCT)):
+        if ord(ch) < 128:
+            out.append(ch if ch.isprintable() else " ")
+            continue
+        category = unicodedata.category(ch)[0]
+        if category == "Z":
+            out.append(" ")
+        elif category not in "MSC":         # diakritika, symboly, ridici
+            out.append("?")
+    return " ".join("".join(out).split())
+
+
+# Radek chatu hrace "Ucet (Postava): zprava" - v GetChat bez casu, v logu
+# mapy s nim: "2026.10.06_20.45.56: DeNNy (DeNNy): Zdravim" (ASA v94.15).
+# Jmeno ani tribe nesmi obsahovat zavorky ani dvojtecku - jinak by preposlana
+# zprava ("SERVER: [Mapa] Hrac: text") strukturalne odpovidala znovu.
+CHAT_RE = re.compile(r"^(?:[\d.]+_[\d.]+:\s*)?([^()\[\]:]{1,64}?)\s*\(([^()\[\]]{1,64})\):\s*(.+)$")
+# V logu jen s casovym razitkem herni udalosti - bez nej by za chat mohl
+# projit kterykoli technicky radek tvaru "Neco (neco): text".
+LOG_CHAT_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}_\d{2}\.\d{2}\.\d{2}:\s*"
+                         r"([^()\[\]:]{1,64}?)\s*\(([^()\[\]]{1,64})\):\s*(.+)$")
+# Ozvena ServerChat v logu kazde mapy - i kazde preposlane zpravy, tedy
+# 9 radku na jednu zpravu hrace. Do konzole nepatri.
+SERVER_ECHO_RE = re.compile(r"^(?:\d{4}\.\d{2}\.\d{2}_\d{2}\.\d{2}\.\d{2}:\s*)?SERVER: ")
+
+
+def parse_chat(line, pattern=CHAT_RE):
+    """(hrac, zprava) z radku chatu, jinak None."""
+    match = pattern.match(line)
+    if not match:
+        return None
+    account, player, message = match.groups()
+    # ASA dava ke jmenu ikonu platformy - v kodove strance z ni zbude '?'
+    # (v AMP '\ufffd'). Do zpravy nepatri.
+    junk = " \t\u00a0\ufffd?"
+    player = player.strip(junk) or account.strip(junk)
+    message = message.strip()
+    if not player or not message:
+        return None
+    return player, message
+
 
 _print_lock = threading.Lock()
 
@@ -170,6 +226,11 @@ class Config:
         self.cpu_pinning = env_bool("ARK_CPU_PINNING")
         self.auto_restart = env_bool("ARK_AUTO_RESTART")
         self.cross_chat = env_bool("ARK_CROSS_CHAT")
+        # Most do Discordu - token bota, ID kanalu a smer z Discordu do hry,
+        # viz discordbridge.py. Token se nikam nevypisuje.
+        self.discord_token = env("ARK_DISCORD_TOKEN")
+        self.discord_channel = env("ARK_DISCORD_CHANNEL")
+        self.discord_to_game = env_bool("ARK_DISCORD_TO_GAME")
         self.rate_preset = env("ARK_RATE_PRESET") or "normal"
         self.custom_options = env("ARK_CUSTOM_OPTIONS")
         # Mody - cisla projektu z CurseForge (ASA) / Steam Workshopu (ASE).
@@ -584,6 +645,8 @@ class MapServer:
         # id -> jmeno. Vzdy se NAHRAZUJE celym slovnikem, nikdy nemeni na
         # miste - ctenari (status, whereis, metriky) pak iteruji bez zamku.
         self.players = {}
+        # Pri chat_source "log" sem _tail_log predava (mapa, hrac, zprava).
+        self.chat_sink = None
         self._reader = None
         # Windows: job object mapy (KILL_ON_JOB_CLOSE + pinning), viz winapi.
         self._job = None
@@ -829,8 +892,16 @@ class MapServer:
                 text = self.LOG_PREFIX.sub("", line.strip("\r\n")).strip()
                 if self.STARTED_RE.match(text):
                     self.started.set()
-                if text and not self.LOG_DROP.match(text):
-                    emit(self.name, text)
+                if not text or self.LOG_DROP.match(text) or SERVER_ECHO_RE.match(text):
+                    continue
+                chat = parse_chat(text, LOG_CHAT_RE)
+                if chat:
+                    # Do konzole ho vypise relay jako "<hrac> zprava" - surovy
+                    # radek by tam byl podruhe.
+                    if self.chat_sink:
+                        self.chat_sink(self, *chat)
+                    continue
+                emit(self.name, text)
         except (OSError, ValueError):
             pass
         finally:
@@ -1109,12 +1180,17 @@ class Supervisor:
         self.lifecycle = threading.Lock()
         self._rolling_lock = threading.Lock()
         self.startup = None
+        # DiscordBridge, kdyz je nastaveny token i kanal - viz main().
+        self.discord = None
+        self._chat_queue = queue.Queue()
 
         cores = assign_cores(map_names) if cfg.cpu_pinning else {}
         self.maps = {}
         for name in map_names:
             index = CANONICAL_MAPS.index(name)
             self.maps[name] = MapServer(name, index, cfg, cores.get(name))
+            if PROFILE["chat_source"] == "log":
+                self.maps[name].chat_sink = self._queue_chat
 
     # --- presety ---
 
@@ -1298,8 +1374,21 @@ class Supervisor:
                 if started:
                     server.wait_ready(self.cfg.ready_timeout, self.stopping)
 
+    def _queue_chat(self, origin, player, message):
+        # Vola vlakno logu mapy - preposilani (RCON na 9 map, Discord) ho
+        # nesmi brzdit.
+        self._chat_queue.put((origin, player, message))
+
     def chat_loop(self):
         """Chat z map do konzole AMP; s CrossChat i mezi mapami (misto Cross-Ark-Chat)."""
+        if PROFILE["chat_source"] == "log":
+            while not self.stopping.is_set():
+                try:
+                    origin, player, message = self._chat_queue.get(timeout=1)
+                except queue.Empty:
+                    continue
+                self._relay(origin, player, message)
+            return
         while not self.stopping.wait(5):
             for server in self.maps.values():
                 if not server.running or not server.probe_ready():
@@ -1311,32 +1400,41 @@ class Supervisor:
                 for line in chat.splitlines():
                     line = line.strip()
                     # Vlastni preposlana zprava se vraci zpet v GetChat jako
-                    # "SERVER: ..." (overeno v94.15) a regex v _relay ji nechyti
-                    # ani jinak - chybi "(Postava)". Bez toho by se chat mezi
+                    # "SERVER: ..." (overeno v94.15) a regex ji nechyti ani
+                    # jinak - chybi "(Postava)". Bez toho by se chat mezi
                     # mapami lavinovite rozmnozil.
                     if not line or line.startswith("SERVER:"):
                         continue
-                    self._relay(server, line)
+                    chat_line = parse_chat(line)
+                    if chat_line:
+                        self._relay(server, *chat_line)
 
-    def _relay(self, origin, line):
-        # Jmeno ani tribe nesmi obsahovat zavorky ani dvojtecku - jinak by
-        # preposlana zprava strukturalne odpovidala znovu.
-        match = re.match(
-            r"^(?:[\d.]+_[\d.]+:\s*)?([^()\[\]:]{1,64}?)\s*\(([^()\[\]]{1,64})\):\s*(.+)$",
-            line)
-        if not match:
-            return
-        _account, player, message = match.groups()
-        # ASA dava ke jmenu ikonu platformy - v kodove strance z ni zbude '?'
-        # (v AMP '\ufffd'). Do zpravy nepatri.
-        player = player.strip(" \t\u00a0\ufffd?") or _account.strip(" \t\u00a0\ufffd?")
+    def _relay(self, origin, player, message):
+        where = display_name(origin.name)
         # Do konzole AMP vzdy - na tenhle radek cili Console.UserChatRegex.
         emit(origin.name, f"<{player}> {message}")
-        if not self.cfg.cross_chat:
-            return
-        payload = chat_text(f"[{display_name(origin.name)}] {player}: {message}")
+        if self.discord:
+            self.discord.send(f"**{escape_markdown(player)}** [{escape_markdown(where)}]: "
+                              f"{escape_markdown(message)}")
+        if self.cfg.cross_chat:
+            self._server_chat(where, player, message, skip=origin)
+
+    def relay_from_discord(self, name, text):
+        """Zprava z kanalu na Discordu do hry - na vsechny mapy."""
+        emit("discord", f"<{name}> {text}")
+        self._server_chat("Discord", name, text)
+
+    # Delsi zpravu hra stejne neukaze celou (zprava z Discordu muze mit
+    # 2000 znaku).
+    CHAT_MAX = 300
+
+    def _server_chat(self, where, name, message, skip=None):
+        # Jmeno zvlast - z "Mistr <emoji>" by jinak zbylo "Mistr : zprava".
+        payload = f"[{where}] {chat_text(name) or '?'}: {chat_text(message)}"
+        if len(payload) > self.CHAT_MAX:
+            payload = payload[:self.CHAT_MAX - 3] + "..."
         for server in self.maps.values():
-            if server is origin or not server.ready or not server.running:
+            if server is skip or not server.ready or not server.running:
                 continue
             try:
                 server.rcon.command(f"ServerChat {payload}")
@@ -1789,6 +1887,15 @@ def main():
     for loop in (supervisor.watchdog_loop, supervisor.chat_loop,
                  supervisor.metrics_loop, supervisor.players_loop):
         threading.Thread(target=loop, daemon=True).start()
+    if cfg.discord_token and cfg.discord_channel.isdigit():
+        supervisor.discord = DiscordBridge(
+            cfg.discord_token, cfg.discord_channel, supervisor.relay_from_discord,
+            lambda msg: emit("discord", msg), supervisor.stopping,
+            inbound=cfg.discord_to_game)
+        supervisor.discord.start()
+    elif cfg.discord_token or cfg.discord_channel:
+        log("VAROVANI: most k Discordu vypnuty - chce token bota i ID kanalu "
+            "(cislo, ne nazev kanalu)")
 
     try:
         for line in sys.stdin:

@@ -23,6 +23,8 @@ mezi nimi postupně rozejde.
   díl volných jader v souvislém bloku (když je map víc než jader, dělí se a
   supervisor to ohlásí)
 - **Cross-server chat** — nahrazuje Cross-Ark-Chat, bez druhého procesu
+- **Most do Discordu** — chat ze hry do kanálu a z kanálu do hry; stačí token bota
+  a ID kanálu, žádný další proces ani knihovna (viz Chat a Discord)
 - **Evolution eventy** (2×/4×) — přepnou se při nejbližším restartu
 - **Restartové fixy per mapa** — `DestroyWildDinos`, úly, hnízda, vejce
 - **Zálohy za běhu** — `quiesce`/`dequiesce`: AMP zálohuje bez vypnutí clusteru
@@ -78,6 +80,11 @@ git službě zpřístupni, nebo šablonu dej jako lokální úložiště: do Con
 Repositories `LOCAL/ArkClusterAMP:staging` a soubory šablony (`manifest.json`,
 `arkasacluster*`) do `<ADS>\Plugins\ADSModule\DeploymentTemplates\LOCAL-ArkClusterAMP-staging\`.
 Krok Update *Supervisor Download* si git najde i mimo PATH (`Program Files\Git`).
+
+RCON windowsového buildu ASE (v361.7) se chová jako ASA: na prázdný
+`RESPONSE_VALUE` neodpoví a každý příkaz s terminátorem vyprší (ověřeno). Profil
+ASE proto na Windows přepíná klienta do režimu bez terminátoru, jinak by
+nešlo ani `DoExit`.
 
 ### Obě hry
 
@@ -155,6 +162,8 @@ Pro jednu konkrétní instanci (bez zásahu do repa) jsou v nastavení AMP:
 | *Extra Command-Line Switches* | přepínače za URL, např. `-AllowFlyerSpeedLeveling` |
 | *Game.ini - Extra Lines* | řádky na konec generovaného `Game.ini` (sekce `ShooterGameMode`) |
 | *Rate Preset* | `normal` / `2x` / `4x` / `5x` z `presets.json` |
+| *Discord Bot Token*, *Discord Channel ID* | most chatu do kanálu na Discordu — viz Chat a Discord |
+| *Discord -> Game Chat* | zprávy z kanálu i do hry (výchozí zapnuto) |
 
 Jméno serveru je *Server Name* + čitelné jméno mapy („Sarkastic.eu ASA PVE - The Island“).
 
@@ -162,6 +171,34 @@ Jméno serveru je *Server Name* + čitelné jméno mapy („Sarkastic.eu ASA PVE
 vytvoří znovu s výchozími hodnotami (ověřeno — stackování ×10 se tak na server
 nikdy nedostalo). Klíče `[ServerSettings]` proto jdou na příkazovou řádku, kde je
 ARK převezme. Smí tam jen klíče se sloupcem CMD na wiki a hodnoty bez mezer.
+
+### Chat a Discord
+
+Chat hráčů se bere z RCON `GetChat` (každých 5 s), nebo z logu mapy — podle
+`chat_source` v profilu hry (`GAMES` v supervisoru). Log ASA má chat okamžitě a v
+UTF-8, `GetChat` na Windows v kódové stránce systému (cp1252: z č, ř, ě, ů je
+`?`). ASA zůstává na `GetChat`, dokud se neověří, že v logu není i tribe chat —
+ten nesmí jít ostatním ani na Discord. Do hry jde přes RCON jen ASCII
+(`ServerChat`), takže z Discordu a mezi mapami chodí zprávy bez diakritiky.
+
+Most do Discordu je bot, který přes REST API v10 posílá chat ze hry do jednoho
+kanálu a každé 3 s si z něj bere nové zprávy pro hru (`[Discord] jméno: text` na
+všechny mapy). Nastavení:
+
+1. [Developer Portal](https://discord.com/developers/applications) → aplikace →
+   **Bot** → *Reset Token*; token do *Discord Bot Token*. **Ne** *Public Key* z
+   General Information — ten slouží jen k ověřování podpisů interakcí.
+2. Na stejné stránce zapni **Message Content Intent**. Bez něj Discord vrací u
+   cizích zpráv prázdný text i přes REST (most to ohlásí v konzoli).
+3. Bot v kanálu potřebuje *Zobrazit kanál*, *Posílat zprávy* a *Číst historii
+   zpráv*. ID kanálu: v Discordu Režim vývojáře, pak pravým na kanál → *Kopírovat
+   ID kanálu* → do *Discord Channel ID*.
+
+Zprávy ze hry odcházejí bez pingů (`allowed_mentions` prázdné) a bez náhledů
+odkazů, markdown se escapuje. Co se nahromadí, odejde jednou zprávou. Zprávy
+botů a webhooků (i vlastní) se do hry nevracejí. Při 401/403/404 most ohlásí
+chybu jednou a zkouší jen jednou za 10 minut — Discord po 10 000 neplatných
+požadavcích za 10 minut adresu dočasně zablokuje. Token se nikam nevypisuje.
 
 ### Stackování
 
@@ -271,6 +308,10 @@ Ověřeno na skutečném serveru (Windows, 3 mapy naraz), ne odvozeno:
 - **`SessionName` s mezerami projde** — Python argument na Windows uzavře do
   uvozovek (ověřeno „Sarkastic ASA Test - TheIsland_WP“).
 - **RAM: 7–11 GB na mapu** po startu (ScorchedEarth 7, TheIsland 10, Ragnarok 10,8).
+- **Chat je i v logu mapy**, s časem a v UTF-8
+  (`2026.10.06_20.45.56: DeNNy (DeNNy): Zdravim`), stejně jako ozvěna každého
+  `ServerChat` (`SERVER: …`). `GetChat` vrací tentýž řádek bez času, ale v kódové
+  stránce systému. Z cizích platforem ikona u jména zatím vidět nebyla.
 
 ## Porty
 
