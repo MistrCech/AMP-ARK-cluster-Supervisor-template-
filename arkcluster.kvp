@@ -95,7 +95,7 @@ Console.UserJoinRegex=^\[[^\]]+\] >>> (?<username>.+?) \((?<userid>[0-9A-Za-z]+)
 Console.UserLeaveRegex=^\[[^\]]+\] <<< (?<username>.+?) \((?<userid>[0-9A-Za-z]+)\) left this ARK!$
 Console.UserChatRegex=^\[[^\]]+\] <(?!<<)(?<username>.+?)> (?<message>.+)$
 Console.UpdateAvailableRegex=
-Console.MetricsRegex=^\[supervisor\] METRICS maps_up=(?<Maps_Up>\d+) players=(?<Players>\d+) ram_gb=(?<Cluster_RAM_GB>[\d.]+) cpu_cores=(?<Cluster_CPU_Cores>[\d.]+)$
+Console.MetricsRegex=^\[supervisor\] METRICS maps_up=(?<Maps>\d+) players=\d+ ram_gb=(?<GB>[\d.]+) cpu_cores=[\d.]+$
 Console.SuppressLogAtStart=False
 Console.ActivateLogRegex=
 Console.HideFromConsoleRegex=^\[.+?\] VERBOSE

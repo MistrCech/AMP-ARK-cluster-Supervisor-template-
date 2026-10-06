@@ -34,7 +34,8 @@ mezi nimi postupně rozejde.
   obojím uloží svět. Na Linuxu bez core dumpů. Na Windows jsou mapy v job objectu
   supervisoru: když ho AMP zabije, skončí i ony — žádní sirotci, které by příští
   start pustil podruhé nad stejným savem
-- **Grafy v AMP** — mapy, hráči, RAM a CPU celého clusteru (AMP sám měří jen supervisor)
+- **Grafy v AMP** — běžící mapy a RAM celého clusteru (AMP sám měří jen supervisor;
+  hráče ukazuje ze seznamu uživatelů). Víc dlaždic se do řádku instance nevejde
 
 ## Instalace
 
