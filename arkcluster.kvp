@@ -1,6 +1,6 @@
 Meta.DisplayName=ARK: Survival Evolved (Cluster)
 Meta.Description=Cely ARK cluster v JEDNE instanci. Zaskrtnes mapy, ktere chces, a Python supervisor uvnitr spusti vsechny nad jednou instalaci hry (~15 GB misto 13x15 GB) se sdilenou konfiguraci. Ovladani jednotlivych map zustava granularni pres konzoli AMP.
-Meta.OS=Linux
+Meta.OS=Windows, Linux
 Meta.AarchSupport=NotSupported
 Meta.Arch=x86_64
 Meta.Author=MistrCech
@@ -30,7 +30,7 @@ App.DisplayName=ARK: Survival Evolved (Cluster)
 App.RootDir=./arkcluster/
 App.BaseDirectory=./arkcluster/
 App.SteamWorkshopDownloadLocation=
-App.ExecutableWin=
+App.ExecutableWin={{PythonExecutable}}
 App.ExecutableLinux=/usr/bin/python3
 App.WorkingDir=supervisor
 App.LinuxCommandLineArgs=

@@ -7,7 +7,7 @@ Dvě šablony, jeden supervisor (hru vybírá proměnná `ARK_GAME`):
 
 | šablona | hra | hostitel |
 |---|---|---|
-| **ARK: Survival Evolved (Cluster)** | ASE, 13 map | Linux |
+| **ARK: Survival Evolved (Cluster)** | ASE, 13 map | Linux i Windows |
 | **ARK: Survival Ascended (Cluster)** | ASA, 10 map | Windows (ASA server pro Linux neexistuje) |
 
 Řeší to bolest 13 samostatných instancí: 13 × 15 GB stejných souborů, update, při
@@ -61,7 +61,7 @@ Update to ověří v kroku *Python Check*. V kontejneru je obojí už v obrazu
 sudo apt install python3 git     # Debian/Ubuntu, pokud chybí
 ```
 
-### ASA na Windows
+### Windows (ASA i ASE)
 
 Hostitel potřebuje **Python** (aspoň 3.7, instalátor z python.org „pro všechny
 uživatele“) a **Git for Windows**, oba na **systémové** PATH — AMP běží jako

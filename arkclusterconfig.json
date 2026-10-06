@@ -578,5 +578,20 @@
         "DefaultValue": "",
         "EnumValues": {},
         "Hidden": true
+    },
+    {
+        "DisplayName": "Python Executable",
+        "Category": "ARK Cluster:hub",
+        "Subcategory": "Application:code:6",
+        "Description": "Jen Windows: cesta k python.exe (aspon 3.7). Na Linuxu se bere /usr/bin/python3. Supervisor bezi na ciste standardni knihovne - zadny venv ani pip.",
+        "Keywords": "python,path",
+        "FieldName": "PythonExecutable",
+        "InputType": "text",
+        "IsFlagArgument": false,
+        "ParamFieldName": "PythonExecutable",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "C:\\Program Files\\Python313\\python.exe",
+        "EnumValues": {},
+        "Placeholder": "C:\\Program Files\\Python313\\python.exe"
     }
 ]

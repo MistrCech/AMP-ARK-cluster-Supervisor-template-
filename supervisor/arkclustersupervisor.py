@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Supervisor ARK clusteru - vsechny mapy z jedne instalace, v jedne instanci AMP.
 
-ARK: Survival Evolved na Linuxu i ARK: Survival Ascended na Windows - hru vybira
-promenna ARK_GAME (ase / asa). Spousti se misto herniho serveru. Mapy dostane jako argumenty (kazde
-zaskrtavatko v AMP se rozvine na jmeno mapy nebo prazdno), zbytek konfigurace
-cte z promennych prostredi, ktere naplni sablona.
+ARK: Survival Evolved (Linux i Windows) a ARK: Survival Ascended (Windows) - hru
+vybira promenna ARK_GAME (ase / asa). Spousti se misto herniho serveru. Mapy
+dostane jako argumenty (kazde zaskrtavatko v AMP se rozvine na jmeno mapy nebo
+prazdno), zbytek konfigurace cte z promennych prostredi, ktere naplni sablona.
 
 Prikazy prijima na stdin - tim je konzole AMP zaroven ovladacim panelem.
 """
@@ -39,6 +39,9 @@ GAMES = {
         "app_dir": "376030",
         "binary": "ShooterGame/Binaries/Linux/ShooterGameServer",
         "config_subdir": "LinuxServer",
+        # ASE bezi i na Windows (ASA jen tam) - na nem tyhle hodnoty.
+        "windows": {"binary": "ShooterGame/Binaries/Win64/ShooterGameServer.exe",
+                    "config_subdir": "WindowsServer"},
         "maps": [
             "TheIsland", "TheCenter", "ScorchedEarth_P", "Ragnarok", "Aberration_P",
             "Extinction", "Valguero_P", "Genesis", "CrystalIsles", "Gen2",
@@ -69,7 +72,9 @@ GAMES = {
     },
 }
 GAME = (os.environ.get("ARK_GAME") or "ase").strip().lower()
-PROFILE = GAMES.get(GAME, GAMES["ase"])
+PROFILE = dict(GAMES.get(GAME, GAMES["ase"]))
+if IS_WINDOWS:
+    PROFILE.update(PROFILE.pop("windows", {}))
 CANONICAL_MAPS = PROFILE["maps"]
 
 # Windows: herni server bez okna konzole a ve vlastni skupine procesu.

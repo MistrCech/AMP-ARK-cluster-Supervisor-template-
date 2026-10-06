@@ -17,6 +17,39 @@
         "SkipOnFailure": false
     },
     {
+        "UpdateStageName": "Config Directory Creation",
+        "UpdateSourcePlatform": "Windows",
+        "UpdateSource": "CreateDirectory",
+        "UpdateSourceArgs": "{{$FullBaseDir}}376030/ShooterGame/Saved/Config/WindowsServer",
+        "OverwriteExistingFiles": false
+    },
+    {
+        "UpdateStageName": "SteamCMD for Mods",
+        "UpdateSourcePlatform": "Windows",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "powershell.exe",
+        "UpdateSourceArgs": "-NoProfile -Command \"$d = '{{$FullBaseDir}}376030\\Engine\\Binaries\\ThirdParty\\SteamCMD\\Win64'; New-Item -ItemType Directory -Force $d | Out-Null; Copy-Item '{{$FullRootDir}}steamcmd.exe' $d -Force\"",
+        "SkipOnFailure": true
+    },
+    {
+        "UpdateStageName": "Supervisor Download",
+        "UpdateSourcePlatform": "Windows",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "powershell.exe",
+        "UpdateSourceArgs": "-NoProfile -Command \"$ProgressPreference='SilentlyContinue'; $git = (Get-Command git.exe -ErrorAction SilentlyContinue).Source; if (-not $git) { $git = Join-Path $env:ProgramFiles 'Git\\cmd\\git.exe' }; if (-not (Test-Path $git)) { Write-Output 'Error: git nenalezen - nainstaluj Git for Windows'; exit 1 }; cd arkcluster; Remove-Item srv -Recurse -Force -ErrorAction SilentlyContinue | Out-Null; $DownloadSource = \\\"{{DownloadSource}}\\\"; $DownloadBranch = \\\"{{DownloadBranch}}\\\"; if (![string]::IsNullOrEmpty(\\\"{{DownloadUsername}}\\\")) { $DownloadUrl = $DownloadSource -replace \\\"https://\\\", \\\"https://{{DownloadUsername}}:{{DownloadPassword}}@\\\" } else { $DownloadUrl = \\\"$DownloadSource\\\" }; if (-Not (Test-Path .git)) { Write-Output \\\"Installing supervisor\\\"; & $git clone -q \\\"$DownloadUrl\\\" srv 1> $null; Copy-Item srv/* ./ -Recurse -Force -ErrorAction SilentlyContinue | Out-Null; Copy-Item srv/.git ./ -Recurse -Force -ErrorAction SilentlyContinue | Out-Null; Remove-Item srv -Recurse -Force -ErrorAction SilentlyContinue | Out-Null; if ([string]::IsNullOrEmpty($DownloadBranch)) { $DownloadBranch = (& $git symbolic-ref refs/remotes/origin/HEAD) -replace '.*/' }; & $git checkout -q --force $DownloadBranch 1> $null; if ($LASTEXITCODE -eq 0) { & $git pull -q 1> $null }; if ($LASTEXITCODE -eq 0) { Write-Output \\\"Supervisor installed\\\" } else { exit 1 } } else { Write-Output \\\"Updating supervisor\\\"; & $git remote set-url origin \\\"$DownloadUrl\\\" 1> $null; if ([string]::IsNullOrEmpty($DownloadBranch)) { $DownloadBranch = (& $git symbolic-ref refs/remotes/origin/HEAD) -replace '.*/' }; & $git checkout -q --force $DownloadBranch 1> $null; if ($LASTEXITCODE -eq 0) { & $git pull -q 1> $null }; if ($LASTEXITCODE -eq 0) { Write-Output \\\"Supervisor updated\\\" } else { exit 1 } }\"",
+        "UpdateSourceConditionSetting": "DownloadType",
+        "UpdateSourceConditionValue": "GitRepo",
+        "SkipOnFailure": false
+    },
+    {
+        "UpdateStageName": "Python Check",
+        "UpdateSourcePlatform": "Windows",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "cmd.exe",
+        "UpdateSourceArgs": "/C \"\"{{PythonExecutable}}\" -c \"import sys; sys.exit(sys.version_info < (3, 7))\" || (echo Error: Python nenalezen nebo je starsi nez 3.7 - uprav Python Executable v nastaveni instance. & exit /b 1)\"",
+        "SkipOnFailure": false
+    },
+    {
         "UpdateStageName": "SteamCMD Directory Creation",
         "UpdateSourcePlatform": "Linux",
         "UpdateSource": "CreateDirectory",
