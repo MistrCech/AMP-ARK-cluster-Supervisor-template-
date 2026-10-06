@@ -70,6 +70,14 @@ nastavení instance (*Python Executable*, výchozí `C:\Program Files\Python313\
 Pravidla Windows Firewallu si AMP pro porty instance dělá sám
 (`AMP:<instance>:…`); na routeru přesměruj UDP herní a query porty (viz Porty).
 
+Bez gitu na PATH **služby** AMP (služba ho vidí až po restartu Windows nebo
+služby) stahuje AMP repozitáře šablon jako zip a správně je pojmenuje jen pro
+větev `main` (ADSModule 2.8). Větev `staging` pak v nabídce aplikací chybí — buď
+git službě zpřístupni, nebo šablonu dej jako lokální úložiště: do Configuration
+Repositories `LOCAL/ArkClusterAMP:staging` a soubory šablony (`manifest.json`,
+`arkasacluster*`) do `<ADS>\Plugins\ADSModule\DeploymentTemplates\LOCAL-ArkClusterAMP-staging\`.
+Krok Update *Supervisor Download* si git najde i mimo PATH (`Program Files\Git`).
+
 ### Obě hry
 
 Pak vytvoř instanci ze šablony **ARK: Survival Evolved (Cluster)** nebo **ARK:
@@ -260,7 +268,8 @@ Ověřeno na skutečném serveru (Windows, 3 mapy naraz), ne odvozeno:
 | RCON (TCP) | 27100 + index | 27100 + index |
 
 Základní porty jdou změnit v AMP (Edit Instance, když instance stojí) — mapy se
-od nich odvozují stejně. Na routeru přesměruj jen UDP herní a query porty. RCON
+od nich odvozují stejně. Přes API `ADSModule/SetInstanceNetworkInfo` jen s
+`mustStop=true`; bez něj vrátí úspěch, ale změní jen záznam v ADS, ne instanci. Na routeru přesměruj jen UDP herní a query porty. RCON
 ne: supervisor se k němu připojuje přes localhost a AMP na Windows otevírá ve
 firewallu hostitele všechny porty instance, takže RCON je i tak dostupný z LAN.
 
