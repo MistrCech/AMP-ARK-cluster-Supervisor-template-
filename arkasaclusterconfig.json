@@ -301,6 +301,20 @@
         "EnumValues": {}
     },
     {
+        "DisplayName": "GameUserSettings.ini - Extra Lines",
+        "Category": "ARK Cluster:hub",
+        "Subcategory": "Server:dns:2",
+        "Description": "Klice, ktere ARK z prikazove radky nebere (wiki: CLI No) - supervisor je pred kazdym startem doplni do GameUserSettings.ini, ktery si ARK vytvori sam. Jeden na radek, sekce v hranatych zavorkach, bez sekce = [ServerSettings]. Napr. AllowCaveBuildingPvE=True, nebo [Ragnarok] a pod tim AllowMultipleTamedUnicorns=True.",
+        "Keywords": "gameusersettings,gus,ini,extra",
+        "FieldName": "GusExtra",
+        "InputType": "Textarea",
+        "IsFlagArgument": false,
+        "ParamFieldName": "GusExtra",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "",
+        "EnumValues": {}
+    },
+    {
         "DisplayName": "Cluster ID",
         "Category": "ARK Cluster:hub",
         "Subcategory": "Cluster:group:3",

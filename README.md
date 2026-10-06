@@ -161,6 +161,7 @@ Pro jednu konkrétní instanci (bez zásahu do repa) jsou v nastavení AMP:
 | *Mods* | čísla projektů oddělená čárkou — ASA z CurseForge (`-mods=`), ASE ze Steam Workshopu (`?GameModIds=`); server si je stáhne sám |
 | *Extra Command-Line Switches* | přepínače za URL, např. `-AllowFlyerSpeedLeveling` |
 | *Game.ini - Extra Lines* | řádky na konec generovaného `Game.ini` (sekce `ShooterGameMode`) |
+| *GameUserSettings.ini - Extra Lines* | klíče, které ARK z příkazové řádky nebere (wiki: CLI No), se sekcemi — např. `AllowCaveBuildingPvE=True`, `[Ragnarok]` + `AllowMultipleTamedUnicorns=True`; supervisor je před každým startem doplní do souboru, který si ARK píše sám |
 | *Rate Preset* | `normal` / `2x` / `4x` / `5x` z `presets.json` |
 | *Discord Bot Token*, *Discord Channel ID* | most chatu do kanálu na Discordu — viz Chat a Discord |
 | *Discord -> Game Chat* | zprávy z kanálu i do hry (výchozí zapnuto) |
@@ -177,6 +178,9 @@ Jméno serveru je *Server Name* + čitelné jméno mapy („Sarkastic.eu ASA PVE
 vytvoří znovu s výchozími hodnotami (ověřeno — stackování ×10 se tak na server
 nikdy nedostalo). Klíče `[ServerSettings]` proto jdou na příkazovou řádku, kde je
 ARK převezme. Smí tam jen klíče se sloupcem CMD na wiki a hodnoty bez mezer.
+Klíče doplněné do jeho *vlastního* souboru ale ARK načte a při přepisu ponechá
+(ověřeno na ASE 7. 10.: `AllowCaveBuildingPvE`, `[Ragnarok] AllowMultipleTamedUnicorns`) —
+na to je pole *GameUserSettings.ini - Extra Lines*.
 
 ### Chat a Discord
 

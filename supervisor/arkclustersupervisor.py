@@ -236,6 +236,8 @@ class Config:
         self.custom_args = env("ARK_CUSTOM_ARGS")
         # Radky navic na konec Game.ini - bez strip, jde o radky.
         self.gameini_extra = os.environ.get("ARK_GAMEINI_EXTRA", "")
+        # Klice do GameUserSettings.ini (se sekcemi) - viz patch_gus.
+        self.gus_extra = os.environ.get("ARK_GUS_EXTRA", "")
         self.bind_ip = env("ARK_BIND_IP") or "0.0.0.0"
         # MultiHome ma smysl jen kdyz AMP prideli konkretni adresu. Samotna
         # adresa nestaci - bez prepinace -MULTIHOME se funkce nezapne.
@@ -637,6 +639,76 @@ def write_shared_config(cfg, presets, preset_name):
             log(f"CHYBA: Game.ini nelze zapsat: {exc}")
     log(f"Konfig pripraven: preset '{preset_name}', Game.ini zamceno na 444, "
         f"ServerSettings {len(cfg.server_settings)} klicu na prikazovou radku")
+    patch_gus(cfg)
+
+
+def gus_entries(text):
+    """[(sekce, klic, hodnota)] z radku pole instance; bez sekce = ServerSettings."""
+    section, out = "ServerSettings", []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(";"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip()
+        elif "=" in line:
+            key, value = line.split("=", 1)
+            if key.strip():
+                out.append((section, key.strip(), value.strip()))
+    return out
+
+
+def patch_gus(cfg):
+    """Doplni klice z nastaveni instance do GameUserSettings.ini, ktery napsal ARK.
+
+    Nektere volby ARK z prikazove radky nebere (wiki: cli No) - napr.
+    AllowCaveBuildingPvE nebo AllowMultipleTamedUnicorns v sekci [Ragnarok].
+    Cely rucne psany soubor ARK zahodi (viz write_shared_config), ale klice
+    doplnene do jeho vlastniho souboru nacte a pri prepisu ponecha (overeno
+    na ASE v361.7 7. 10. 2026). Pred kazdym startem znovu - soubor je pro
+    vsechny mapy spolecny a ARK ho prepisuje.
+    """
+    entries = gus_entries(cfg.gus_extra)
+    if not entries:
+        return
+    path = cfg.config_dir / "GameUserSettings.ini"
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        log("GameUserSettings.ini jeste neexistuje (prvni start) - vlastni klice "
+            "se doplni pred dalsi mapou")
+        return
+    except OSError as exc:
+        log(f"VAROVANI: GameUserSettings.ini nejde precist: {exc}")
+        return
+    encoding = "utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8"
+    text = raw.decode(encoding, errors="surrogateescape")
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines()
+    for section, key, value in entries:
+        start = next((i for i, line in enumerate(lines)
+                      if line.strip().lower() == f"[{section.lower()}]"), None)
+        if start is None:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines += [f"[{section}]", f"{key}={value}"]
+            continue
+        end = next((i for i in range(start + 1, len(lines))
+                    if lines[i].strip().startswith("[")), len(lines))
+        hits = [i for i in range(start + 1, end)
+                if lines[i].split("=", 1)[0].strip().lower() == key.lower()]
+        for i in hits:
+            lines[i] = f"{key}={value}"
+        if not hits:
+            lines.insert(start + 1, f"{key}={value}")
+    out = newline.join(lines) + newline
+    if out == text:
+        return
+    try:
+        path.write_bytes(out.encode(encoding, errors="surrogateescape"))
+        log(f"GameUserSettings.ini: doplneno z nastaveni instance ({len(entries)} klicu)")
+    except OSError as exc:
+        log(f"VAROVANI: GameUserSettings.ini nejde zapsat: {exc}")
 
 
 # --------------------------------------------------------------------------
@@ -1301,6 +1373,9 @@ class Supervisor:
         log(f"Startuji {len(self.maps)} map, preset '{preset}', "
             f"prodleva {self.cfg.start_delay} s mezi mapami")
         for position, server in enumerate(self.maps.values()):
+            if position:
+                # Na cisty instalaci soubor vytvori az prvni mapa.
+                patch_gus(self.cfg)
             pending = self._mods_pending()
             if pending:
                 log(f"mody {', '.join(pending)} nejsou nainstalovane - {server.name} je "
