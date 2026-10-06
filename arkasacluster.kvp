@@ -1,7 +1,7 @@
 Meta.DisplayName=ARK: Survival Ascended (Cluster)
 Meta.Description=Cely ARK: Survival Ascended cluster v JEDNE instanci (Windows). Zaskrtnes mapy a Python supervisor je spusti nad jednou instalaci hry se sdilenou konfiguraci a ovladanim z konzole AMP.
 Meta.OS=Windows
-Meta.AarchSupport=None
+Meta.AarchSupport=NotSupported
 Meta.Arch=x86_64
 Meta.Author=MistrCech
 Meta.URL=https://github.com/MistrCech/AMP-ARK-cluster-Supervisor-template-

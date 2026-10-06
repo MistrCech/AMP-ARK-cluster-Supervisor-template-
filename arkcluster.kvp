@@ -1,7 +1,7 @@
 Meta.DisplayName=ARK: Survival Evolved (Cluster)
 Meta.Description=Cely ARK cluster v JEDNE instanci. Zaskrtnes mapy, ktere chces, a Python supervisor uvnitr spusti vsechny nad jednou instalaci hry (~15 GB misto 13x15 GB) se sdilenou konfiguraci. Ovladani jednotlivych map zustava granularni pres konzoli AMP.
 Meta.OS=Linux
-Meta.AarchSupport=None
+Meta.AarchSupport=NotSupported
 Meta.Arch=x86_64
 Meta.Author=MistrCech
 Meta.URL=https://github.com/MistrCech/AMP-ARK-cluster-Supervisor-template-
