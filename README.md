@@ -279,6 +279,12 @@ Ověřeno na skutečném serveru, ne odvozeno — z toho vychází návrh superv
   jednom jádře) a podle toho dimenzuje pracovní vlákna. S jedním jádrem startuje
   TheIsland ~40 s; srovnání bez pinningu a dopad na tick při hráčích zatím
   změřené nejsou.
+- **Módy si mapa instaluje sama** (`-AutoManagedMods`) před načtením světa: stáhne je
+  přes `Engine\Binaries\ThirdParty\SteamCMD\Win64` a rozbalí do `Content/Mods`
+  (hotový mód = `<id>.mod`). První start s ~1 GB módů trval 13 min. Když mezitím
+  nastartovala druhá mapa, rozbalovaly obě naráz a 4 ze 7 módů zůstaly bez `.mod`
+  — mapa běžela bez nich. Supervisor proto, dokud nějaký `.mod` chybí, nechá
+  instalovat jen jednu mapu (limit 2 h místo *Ready Timeout*).
 
 ## Co ASA (v94.15) dělá jinak
 

@@ -1262,6 +1262,11 @@ class Supervisor:
         log(f"Startuji {len(self.maps)} map, preset '{preset}', "
             f"prodleva {self.cfg.start_delay} s mezi mapami")
         for position, server in enumerate(self.maps.values()):
+            pending = self._mods_pending()
+            if pending:
+                log(f"mody {', '.join(pending)} nejsou nainstalovane - {server.name} je "
+                    f"nainstaluje a dalsi mapa pocka (limit {self.MOD_INSTALL_TIMEOUT} s "
+                    f"misto {self.cfg.ready_timeout} s)")
             # Poradi zamku vsude stejne: lifecycle -> zamek mapy.
             with self.lifecycle:
                 if self.stopping.is_set():
@@ -1270,12 +1275,29 @@ class Supervisor:
             # wait_ready zamerne MIMO zamek - blokuje az ready_timeout a
             # nesmi tim drzet pripadne vypinani.
             if started:
-                server.wait_ready(self.cfg.ready_timeout, self.stopping)
+                server.wait_ready(self.MOD_INSTALL_TIMEOUT if pending else self.cfg.ready_timeout,
+                                  self.stopping)
             # Prodleva az mezi mapami, ne po posledni.
             if position < len(self.maps) - 1 and self.cfg.start_delay:
                 log(f"cekam {self.cfg.start_delay} s pred dalsi mapou")
                 self.stopping.wait(self.cfg.start_delay)
         log("vsechny mapy nastartovany")
+
+    # Prvni start s ~1 GB modu trval 13 min (ASE, 7. 10. 2026).
+    MOD_INSTALL_TIMEOUT = 7200
+
+    def _mods_pending(self):
+        """ASE: mody, ktere jeste nejsou rozbalene v Content/Mods (chybi <id>.mod).
+
+        Mapa je s -AutoManagedMods stahuje a rozbaluje sama pred nactenim
+        sveta. Kdyz pritom vyprsi ready timeout a nastartuje dalsi mapa,
+        rozbaluji obe tytez soubory naraz - 4 ze 7 modu tak zustaly bez .mod
+        a mapa bezela bez nich (overeno 7. 10. 2026).
+        """
+        if GAME != "ase" or not self.cfg.mods:
+            return []
+        mods_dir = self.cfg.game / "ShooterGame/Content/Mods"
+        return [mod for mod in self.cfg.mods if not (mods_dir / f"{mod}.mod").exists()]
 
     def stop_all(self):
         """Ukonci cluster. Idempotentni: dalsi volajici pocka na dokonceni."""
