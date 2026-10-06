@@ -285,6 +285,13 @@ Ověřeno na skutečném serveru, ne odvozeno — z toho vychází návrh superv
   nastartovala druhá mapa, rozbalovaly obě naráz a 4 ze 7 módů zůstaly bez `.mod`
   — mapa běžela bez nich. Supervisor proto, dokud nějaký `.mod` chybí, nechá
   instalovat jen jednu mapu (limit 2 h místo *Ready Timeout*).
+- **Na Windows módy narazí na limit 260 znaků cesty.** Mapa je rozbaluje z
+  `<hra>\Engine\Binaries\ThirdParty\SteamCMD\Win64\steamapps\workshop\content\346110\<id>\WindowsNoEditor\…`;
+  pod instancí AMP má základ hry 63 znaků a nejhlubší soubor CKF Remastered 312.
+  Na prvním dlouhém souboru se rozbalování tiše zastaví (ověřeno: všechny
+  rozbalené soubory ≤ 257 znaků, nerozbalené módy mají soubory ≥ 260). Řešení:
+  *Short Path (Windows)*, např. `D:\a` — supervisor založí junction na adresář hry
+  a server spustí přes něj (UE bere cesty od `.exe`), nejhlubší soubor má pak 253.
 
 ## Co ASA (v94.15) dělá jinak
 

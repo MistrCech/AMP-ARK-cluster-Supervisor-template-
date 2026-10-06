@@ -203,13 +203,10 @@ class Config:
         base = env("ARK_BASE_DIR")
         # Fallback pro rucni spousteni mimo AMP: supervisor/ je pod base dir.
         self.base = Path(base) if base else HERE.parent
-        self.game = self.base / PROFILE["app_dir"]
-        self.binary = self.game / PROFILE["binary"]
-        # Win64 na Linuxu je symlink na Linux (update krok sablony), na Windows
-        # je to skutecny adresar binarek.
-        self.workdir = self.game / "ShooterGame/Binaries/Win64"
-        self.config_dir = self.game / "ShooterGame/Saved/Config" / PROFILE["config_subdir"]
+        self.set_game_dir(self.base / PROFILE["app_dir"])
         self.cluster_dir = self.base / "clusterdata"
+        # Windows: kratka cesta (junction) ke hre - viz use_short_path.
+        self.short_path = env("ARK_SHORT_PATH")
         self.log_dir = self.base / "logs"
 
         # '?' by v URL mapy zacal dalsi volbu, '"' by na Windows rozbil
@@ -253,6 +250,48 @@ class Config:
         self.game_port = env_int("ARK_GAME_PORT", 7777)
         self.query_port = env_int("ARK_QUERY_PORT", 27015)
         self.rcon_port = env_int("ARK_RCON_PORT", 27100)
+
+    def set_game_dir(self, game):
+        self.game = Path(game)
+        self.binary = self.game / PROFILE["binary"]
+        # Win64 na Linuxu je symlink na Linux (update krok sablony), na Windows
+        # je to skutecny adresar binarek.
+        self.workdir = self.game / "ShooterGame/Binaries/Win64"
+        self.config_dir = self.game / "ShooterGame/Saved/Config" / PROFILE["config_subdir"]
+
+    def use_short_path(self):
+        """Windows: spoustet hru pres junction s kratkou cestou (ARK_SHORT_PATH).
+
+        ARK (UE4) neumi cesty nad 260 znaku a mody s -AutoManagedMods rozbaluje
+        z <hra>/Engine/Binaries/ThirdParty/SteamCMD/Win64/steamapps/workshop/
+        content/346110/<id>/WindowsNoEditor/... Pod instanci AMP ma zaklad hry
+        63 znaku a zdroj nejhlubsiho souboru (CKF Remastered) 312 - rozbalovani
+        se na prvnim dlouhem souboru tise zastavi a mod bez <id>.mod se
+        nenacte (overeno 7. 10. 2026: 4 ze 7 modu). Cestu ke hre si UE bere
+        z cesty k .exe, takze spusteni pres junction zkrati i tyhle cesty.
+        """
+        if not self.short_path or not IS_WINDOWS:
+            return
+        link, target = Path(self.short_path), self.game
+        try:
+            if os.path.lexists(link):
+                current = os.readlink(link)
+                if current.startswith("\\\\?\\"):     # os.readlink vraci \\?\D:\...
+                    current = current[4:]
+                if os.path.normcase(os.path.normpath(current)) != os.path.normcase(str(target)):
+                    log(f"VAROVANI: {link} ukazuje na {current}, ne na {target} - "
+                        f"kratka cesta se nepouzije")
+                    return
+            else:
+                import _winapi
+                _winapi.CreateJunction(str(target), str(link))
+                log(f"zalozen junction {link} -> {target}")
+        except OSError as exc:
+            log(f"VAROVANI: kratka cesta {link} nejde pouzit ({exc}) - mody s dlouhymi "
+                f"cestami se nenainstaluji")
+            return
+        self.set_game_dir(link)
+        log(f"hra pres kratkou cestu {link}")
 
     def ports_for(self, index):
         """Porty se odvozuji od kanonickeho indexu mapy, ne od poradi spusteni.
@@ -1858,6 +1897,7 @@ def main():
         log(f"CHYBA: neznama hra ARK_GAME={GAME!r}, znam: {', '.join(GAMES)}")
         return 1
     cfg = Config()
+    cfg.use_short_path()
 
     # ARK po kazdem korektnim vypnuti (SIGINT) uz po ulozeni spadne na
     # SIGABRT (overeno 3/3 na v361.7). Bez tohohle by kazdy restart mapy

@@ -552,6 +552,20 @@
         }
     },
     {
+        "DisplayName": "Short Path (Windows)",
+        "Category": "ARK Cluster:hub",
+        "Subcategory": "Supervisor:settings:5",
+        "Description": "Jen Windows a jen s mody: kratka cesta, pres kterou se hra spousti (junction na adresar hry), napr. D:\\a. ARK neumi cesty nad 260 znaku a mody s hlubokymi slozkami (S+, CKF) se pod instanci AMP tise nenainstaluji. Supervisor junction zalozi sam. Prazdne = bez junction.",
+        "Keywords": "path,junction,mods,windows",
+        "FieldName": "ShortPath",
+        "InputType": "text",
+        "IsFlagArgument": false,
+        "ParamFieldName": "ShortPath",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "",
+        "EnumValues": {}
+    },
+    {
         "DisplayName": "Supervisor Repository",
         "Category": "ARK Cluster:hub",
         "Subcategory": "Application:code:6",
