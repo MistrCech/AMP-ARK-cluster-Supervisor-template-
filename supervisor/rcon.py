@@ -33,13 +33,23 @@ class RconClient:
     nevyzadany paket "Keep Alive" (id 0); kdyby timeout platil na jednotlivy
     recv, kazdy Keep Alive by ho obnovil a cekani na odpoved, ktera neprijde,
     by nikdy neskoncilo (overeno na serveru v361.7).
+
+    `terminator` vybira, jak se pozna konec odpovedi - ASE a ASA se lisi:
+    ASE na prazdny RESPONSE_VALUE za prikazem odpovi, takze jeho odpoved
+    spolehlive uzavira odpoved na prikaz. ASA (v94.15) na nej neodpovi a
+    spojeni pak neodpovida VUBEC - ani na dalsi prikazy. Stejne mlci, kdyz
+    prijdou dva pakety v jednom cteni. Na kazdy prikaz ale posle prave jeden
+    paket s jeho id, i kdyz nema co rict (ARK_EMPTY), a prikazy postupne
+    po jednom zvlada na jednom spojeni (overeno: GetChat, ServerChat,
+    Broadcast, SaveWorld, ListPlayers, GetGameLog, DoExit).
     """
 
-    def __init__(self, host, port, password, timeout=10.0):
+    def __init__(self, host, port, password, timeout=10.0, terminator=True):
         self.host = host
         self.port = port
         self.password = password
         self.timeout = timeout
+        self.terminator = terminator
         self._sock = None
         self._next_id = 1
         self._lock = threading.Lock()
@@ -100,15 +110,25 @@ class RconClient:
         to dela DoExit) - opakovani by ServerChat zdvojilo a SaveWorld by psal
         do sveta dvakrat naraz. Mrtve spojeni se proto pozna PRED odeslanim.
         `retry` zustava kvuli volajicim, uz nic nedela.
+
+        Cekani na zamek (spojeni drzi jiny prikaz, treba SaveWorld se 120 s)
+        se do limitu nepocita - jinak by prikaz dostal zamek az s proslym
+        limitem a zavrel zdrave spojeni, aniz by cokoli poslal. Kdyz se zamek
+        neuvolni do limitu, prikaz skonci bez zasahu do spojeni.
         """
-        deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
-        with self._lock:
+        limit = self.timeout if timeout is None else timeout
+        if not self._lock.acquire(timeout=limit):
+            raise RconTimeout("RCON: spojeni drzi jiny prikaz")
+        try:
+            deadline = time.monotonic() + limit
             try:
                 self._ready_locked(deadline)
                 return self._command_locked(cmd, deadline)
             except (OSError, RconError):
                 self._close_locked()
                 raise
+        finally:
+            self._lock.release()
 
     def _ready_locked(self, deadline):
         """Pred odeslanim: zahodit cekajici Keep Alive, mrtve spojeni nahradit."""
@@ -125,6 +145,8 @@ class RconClient:
 
     def _command_locked(self, cmd, deadline):
         req_id = self._send_locked(SERVERDATA_EXECCOMMAND, cmd, deadline)
+        if not self.terminator:
+            return self._finish(self._single_reply_locked(req_id, deadline))
         # Prazdny RESPONSE_VALUE hned za prikazem. ARK zpracovava pakety jednoho
         # spojeni po poradi a odpovi i na nej, takze jeho odpoved spolehlive
         # znaci konec odpovedi na prikaz - bez hadani podle delky paketu a bez
@@ -146,6 +168,23 @@ class RconClient:
             elif pkt_id == end_id:
                 break
             # Jinak Keep Alive (id 0) - zahodit, deadline bezi dal.
+        return self._finish(parts)
+
+    def _single_reply_locked(self, req_id, deadline):
+        """Odpoved bez terminatoru: prvni paket s id prikazu.
+
+        ASA ani velkou odpoved nedeli - GetGameLog o 7,5 kB prisel jako jeden
+        paket (v94.15). Kdyby to nekdy rozdelil, zbytek ma stare id a dalsi
+        prikaz ho zahodi jako Keep Alive; odpoved by byla jen zkracena.
+        """
+        while True:
+            pkt_id, _, body = self._recv_locked(deadline)
+            if pkt_id == req_id:
+                return [body]
+            # Jinak Keep Alive (id 0) - zahodit, deadline bezi dal.
+
+    @staticmethod
+    def _finish(parts):
         out = b"".join(parts).decode("utf-8", errors="replace").strip()
         return "" if out == ARK_EMPTY else out
 

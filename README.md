@@ -1,7 +1,14 @@
-# ARK: Survival Evolved Cluster — AMP template
+# ARK Cluster — AMP template (ASE na Linuxu, ASA na Windows)
 
 Celý ARK cluster v **jedné** instanci AMP. Zaškrtneš mapy, které chceš, a Python
 supervisor uvnitř je spustí nad **jednou** instalací hry se **sdílenou** konfigurací.
+
+Dvě šablony, jeden supervisor (hru vybírá proměnná `ARK_GAME`):
+
+| šablona | hra | hostitel |
+|---|---|---|
+| **ARK: Survival Evolved (Cluster)** | ASE, 13 map | Linux |
+| **ARK: Survival Ascended (Cluster)** | ASA, 10 map | Windows (ASA server pro Linux neexistuje) |
 
 Řeší to bolest 13 samostatných instancí: 13 × 15 GB stejných souborů, update, při
 kterém se musí všechny zastavit a každá přepsat zvlášť, a konfigurace, která se
@@ -12,8 +19,9 @@ mezi nimi postupně rozejde.
 - **13 map z jedné instalace** — ~15 GB místo ~195 GB, jeden SteamCMD zápis při updatu
 - **Ovládání po mapách zůstává** — konzole AMP je příkazový kanál (`AdminMethod=STDIO`)
 - **Postupný start** s prodlevou; 13 serverů naráz stroj neustojí
-- **CPU pinning** — každá mapa vlastní fyzické jádro včetně SMT sourozence (když je
-  map víc než volných jader, dělí se a supervisor to ohlásí)
+- **CPU pinning** — každá mapa vlastní fyzická jádra včetně SMT sourozenců, férový
+  díl volných jader v souvislém bloku (když je map víc než jader, dělí se a
+  supervisor to ohlásí)
 - **Cross-server chat** — nahrazuje Cross-Ark-Chat, bez druhého procesu
 - **Evolution eventy** (2×/4×) — přepnou se při nejbližším restartu
 - **Restartové fixy per mapa** — `DestroyWildDinos`, úly, hnízda, vejce
@@ -22,7 +30,10 @@ mezi nimi postupně rozejde.
 - **Seznam hráčů, chat a kick/ban tlačítka** v UI AMP — hráči z RCON `ListPlayers`
   i s ID, které kick/ban potřebují
 - **Log každé mapy v konzoli AMP** — start, savy, chyby; řádek s hesly se nepouští
-- **Korektní vypnutí** — úklid + SIGINT (ARK při něm uloží), bez core dumpů
+- **Korektní vypnutí** — úklid, pak SIGINT (ASE) nebo RCON `DoExit` (ASA); ARK při
+  obojím uloží svět. Na Linuxu bez core dumpů. Na Windows jsou mapy v job objectu
+  supervisoru: když ho AMP zabije, skončí i ony — žádní sirotci, které by příští
+  start pustil podruhé nad stejným savem
 - **Grafy v AMP** — mapy, hráči, RAM a CPU celého clusteru (AMP sám měří jen supervisor)
 
 ## Instalace
@@ -44,7 +55,20 @@ Update to ověří v kroku *Python Check*. V kontejneru je obojí už v obrazu
 sudo apt install python3 git     # Debian/Ubuntu, pokud chybí
 ```
 
-Pak vytvoř instanci ze šablony **ARK: Survival Evolved (Cluster)**, zaškrtni mapy
+### ASA na Windows
+
+Hostitel potřebuje **Python** (aspoň 3.7, instalátor z python.org „pro všechny
+uživatele“) a **Git for Windows**, oba na **systémové** PATH — AMP běží jako
+`NetworkService`, uživatelská PATH ho nezajímá. Cestu k `python.exe` zadáš v
+nastavení instance (*Python Executable*, výchozí `C:\Program Files\Python313\python.exe`).
+
+Pravidla Windows Firewallu si AMP pro porty instance dělá sám
+(`AMP:<instance>:…`); na routeru přesměruj UDP herní a query porty (viz Porty).
+
+### Obě hry
+
+Pak vytvoř instanci ze šablony **ARK: Survival Evolved (Cluster)** nebo **ARK:
+Survival Ascended (Cluster)**, zaškrtni mapy
 v sekci *Maps* a spusť Update. RCON heslo můžeš nechat prázdné — supervisor si při
 prvním startu vygeneruje vlastní a uloží ho do `supervisor-state.json` (práva 600),
 kde ho najdeš pro externí RCON nástroje.
@@ -150,7 +174,7 @@ Ledové wyverny jsou v šabloně **zakomentované**, a to ve variantě, která j
 obsazená. Pozor: `Ragnarok_Wyvern_Override_Ice_C` používá **i Valguero**, a
 `Game.ini` je sdílený, takže odkomentování zasáhne obě mapy.
 
-## Co ARK (v361.7) dělá jinak, než by člověk čekal
+## Co ASE (v361.7) dělá jinak, než by člověk čekal
 
 Ověřeno na skutečném serveru, ne odvozeno — z toho vychází návrh supervisoru:
 
@@ -182,17 +206,58 @@ Ověřeno na skutečném serveru, ne odvozeno — z toho vychází návrh superv
 - **Vyhladovělý server přestane obsluhovat i signály.** Se sníženou prioritou
   (`nice 19`, `CPUWeight=1`) a pinningem na zatížená jádra jednou nezareagoval
   ani na SIGINT. Mapy nespouštěj se sníženou prioritou.
-- **S pinningem vidí UE jedno jádro** (`Number of cores 1` v logu) a podle toho
-  dimenzuje pracovní vlákna. S pinningem startuje TheIsland ~40 s; srovnání bez
-  pinningu a dopad na tick při hráčích zatím změřené nejsou.
+- **S pinningem vidí UE jen přidělená jádra** (`Number of cores 1` v logu při
+  jednom jádře) a podle toho dimenzuje pracovní vlákna. S jedním jádrem startuje
+  TheIsland ~40 s; srovnání bez pinningu a dopad na tick při hráčích zatím
+  změřené nejsou.
+
+## Co ASA (v94.15) dělá jinak
+
+Ověřeno na skutečném serveru (Windows, 3 mapy naraz), ne odvozeno:
+
+- **„has successfully started!“ neznamená nic.** U nového světa ho ASA píše hned
+  na začátku načítání (0,7 GB RAM, ~5 s po startu). Svět je načtený až s řádkem
+  `Server has completed startup and is now advertising for join. (N GB Mem)`,
+  1–2,5 min po startu. RCON port poslouchá od ~15 s, ale odpovídá až po `Full
+  Startup`, 4–10 s před tím řádkem.
+- **`?Port=` v URL ignoruje.** Mapa zkusí výchozí 7777, a když je obsazený, tiše
+  vezme další volný — Ragnarok s `Port=7789` skončil na 7779. Herní port jen přes
+  `-port=`. Peer port (herní + 1) ASA nepoužívá.
+- **Steam subsystem chce vlastní query port** (ověření hráčů ze Steamu; servery
+  se jinak hledají přes EOS). `?QueryPort=` v URL nebere — všechny mapy pak chtějí
+  27015, uspěje jen první a ostatní píšou `Steam Subsystem initialized: FAILED`.
+  Funguje jen přepínač `-QueryPort=`.
+- **RCON odpovídá na každý příkaz právě jedním paketem**, i velkým (`GetGameLog`
+  7,5 kB), a příkazy po jednom zvládá na jednom spojení. Na prázdný
+  `RESPONSE_VALUE` — trik, kterým se u ASE pozná konec odpovědi — ale neodpoví a
+  spojení pak mlčí úplně, i na další příkazy. Stejně dopadnou dva pakety v jednom
+  čtení. Klient má proto pro ASA režim bez terminátoru.
+- **`DoExit` odpoví `Exiting...`**, spojení nechá otevřené, svět uloží za necelou
+  sekundu a proces skončí do 10–55 s — bez pádu (žádný crash dump ani chyba v
+  protokolu aplikací, na rozdíl od ASE). Celé vypnutí clusteru (úklid, 45 s,
+  `DoExit`) trvá ~80 s.
+- **Afinitu si sám přepíše.** `SetProcessAffinityMask` po startu ASA vrátí na všechna
+  CPU, drží až limit job objectu. Počet vláken UE stejně bere z celého stroje
+  (`Number of cores 32`), proto pinning dává mapě férový díl jader, ne jedno.
+- **Na stdout sype analytiku** (GameAnalytics) a každou minutu JSON s výkonem (FPS,
+  ms herního vlákna), ~65 řádků za minutu na mapu, promíchaných mezi vlákny.
+  Supervisor je zahazuje — herní log jde jako u ASE z `-log=<Mapa>.log`.
+- **`SessionName` s mezerami projde** — Python argument na Windows uzavře do
+  uvozovek (ověřeno „Sarkastic ASA Test - TheIsland_WP“).
+- **RAM: 7–11 GB na mapu** po startu (ScorchedEarth 7, TheIsland 10, Ragnarok 10,8).
 
 ## Porty
 
-| | rozsah |
-|---|---|
-| Game | 7777 + 2×index (+1 peer) |
-| Query | 27015 + index |
-| RCON | 27100 + index |
+| | ASE | ASA |
+|---|---|---|
+| Game (UDP) | 7777 + 2×index (+1 peer) | 7777 + 2×index |
+| Query (UDP) | 27015 + index | 27015 + index (Steam subsystem) |
+| RCON (TCP) | 27100 + index | 27100 + index |
+
+Základní porty jdou změnit v AMP (Edit Instance, když instance stojí) — mapy se
+od nich odvozují stejně. Na routeru přesměruj jen UDP herní a query porty. RCON
+ne: supervisor se k němu připojuje přes localhost a AMP na Windows otevírá ve
+firewallu hostitele všechny porty instance, takže RCON je i tak dostupný z LAN.
 
 Port se odvozuje z **kanonického** pořadí mapy, ne z pořadí spuštění — mapa má pořád
 stejný port, i když jinou odškrtneš.
@@ -205,4 +270,12 @@ stejný port, i když jinou odškrtneš.
 cd supervisor
 ARK_BASE_DIR=/cesta/k/instanci/ ARK_RCON_PASSWORD=tajne \
   python3 arkclustersupervisor.py TheIsland Ragnarok
+```
+
+ASA na Windows (`cmd`; hra v `<ARK_BASE_DIR>\2430930`):
+
+```bat
+cd supervisor
+set "ARK_GAME=asa" & set "ARK_BASE_DIR=D:\arktest\asa\"
+python -u arkclustersupervisor.py TheIsland_WP ScorchedEarth_WP Ragnarok_WP
 ```

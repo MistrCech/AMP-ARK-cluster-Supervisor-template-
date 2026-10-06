@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Supervisor ARK SE clusteru - vsechny mapy z jedne instalace, v jedne instanci AMP.
+"""Supervisor ARK clusteru - vsechny mapy z jedne instalace, v jedne instanci AMP.
 
-Spousti se misto ShooterGameServer. Mapy dostane jako argumenty (kazde
+ARK: Survival Evolved na Linuxu i ARK: Survival Ascended na Windows - hru vybira
+promenna ARK_GAME (ase / asa). Spousti se misto herniho serveru. Mapy dostane jako argumenty (kazde
 zaskrtavatko v AMP se rozvine na jmeno mapy nebo prazdno), zbytek konfigurace
 cte z promennych prostredi, ktere naplni sablona.
 
@@ -11,31 +12,85 @@ import configparser
 import json
 import os
 import re
-import resource
 import secrets
 import shlex
 import signal
+import socket
 import subprocess
 import sys
 import threading
 import time
+import unicodedata
 from pathlib import Path
 
 from rcon import RconClient, RconError
 
-# Poradi je zavazne: urcuje prirazeni portu a musi sedet s arkclusterports.json.
-CANONICAL_MAPS = [
-    "TheIsland", "TheCenter", "ScorchedEarth_P", "Ragnarok", "Aberration_P",
-    "Extinction", "Valguero_P", "Genesis", "CrystalIsles", "Gen2",
-    "LostIsland", "Fjordur", "Aquatica",
-]
+IS_WINDOWS = os.name == "nt"
+if IS_WINDOWS:
+    import winapi
+    resource = None
+else:
+    import resource      # jen POSIX - vypnuti core dumpu
+
+# Poradi map je zavazne: urcuje prirazeni portu a musi sedet se souborem
+# portu sablony (arkclusterports.json / arkasaclusterports.json).
+GAMES = {
+    "ase": {
+        "app_dir": "376030",
+        "binary": "ShooterGame/Binaries/Linux/ShooterGameServer",
+        "config_subdir": "LinuxServer",
+        "maps": [
+            "TheIsland", "TheCenter", "ScorchedEarth_P", "Ragnarok", "Aberration_P",
+            "Extinction", "Valguero_P", "Genesis", "CrystalIsles", "Gen2",
+            "LostIsland", "Fjordur", "Aquatica",
+        ],
+        # Radek logu, podle ktereho se pozna, ze mapa nabehla (30-40 s).
+        "started_re": r'^(?:Server: ".*" has successfully started!'
+                      r'|Server has completed startup and is now advertising for join)',
+        # Konec odpovedi RCON znaci odpoved na prazdny paket - viz rcon.py.
+        "rcon_terminator": True,
+    },
+    "asa": {
+        "app_dir": "2430930",
+        "binary": "ShooterGame/Binaries/Win64/ArkAscendedServer.exe",
+        "config_subdir": "WindowsServer",
+        "maps": [
+            "TheIsland_WP", "ScorchedEarth_WP", "TheCenter_WP", "Aberration_WP",
+            "Extinction_WP", "Astraeos_WP", "Ragnarok_WP", "Valguero_WP",
+            "LostColony_WP", "Genesis_WP",
+        ],
+        # "has successfully started!" pise ASA u noveho sveta na ZACATKU
+        # nacitani (0,7 GB RAM, ~5 s po startu). Svet je nacteny az s timhle
+        # radkem, 1-2,5 min po startu (v94.15). RCON port posloucha od ~15 s,
+        # ale odpovida az po "Full Startup", 4-10 s pred timhle radkem.
+        "started_re": r"^Server has completed startup and is now advertising for join",
+        # ASA na prazdny paket neodpovi a spojeni pak mlci uplne - viz rcon.py.
+        "rcon_terminator": False,
+    },
+}
+GAME = (os.environ.get("ARK_GAME") or "ase").strip().lower()
+PROFILE = GAMES.get(GAME, GAMES["ase"])
+CANONICAL_MAPS = PROFILE["maps"]
+
+# Windows: herni server bez okna konzole a ve vlastni skupine procesu.
+CREATE_NO_WINDOW = 0x08000000
+CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 HERE = Path(__file__).resolve().parent
 STATE_FILE = HERE.parent / "supervisor-state.json"
 
-# Znak, ktery hrac do ARK chatu nenapise. Znaci preposlanou zpravu, aby se
-# relay mezi mapami nezacyklil.
-RELAY_MARK = "\u2508"
+
+
+def chat_text(text):
+    """Text pro ServerChat/Broadcast jen v ASCII.
+
+    ARK prikaz z RCON neprekodovava - kazdy bajt nad 127 vezme jako znak se
+    znamenkem, takze z UTF-8 'r' s hackem (C5 99) je ve hre U+FFC5 U+FF99
+    (overeno v94.15). Zadne kodovani tudy neprojde; bez hacku a carek je text
+    aspon citelny ('Prilis zlutoucky kun'), jine pismo jde na '?'.
+    """
+    return "".join(ch if ord(ch) < 128 else ("" if unicodedata.combining(ch) else "?")
+                   for ch in unicodedata.normalize("NFKD", text))
 
 _print_lock = threading.Lock()
 
@@ -48,7 +103,10 @@ def emit(source, line):
     v sablone, takze se nesmi menit bez upravy arkcluster.kvp.
     """
     with _print_lock:
-        sys.stdout.write(f"[{source}] {line}\n")
+        # Kazdy radek s prefixem - viceradkova odpoved RCON by jinak mela
+        # prefix jen na prvnim.
+        for part in str(line).splitlines() or [""]:
+            sys.stdout.write(f"[{source}] {part}\n")
         sys.stdout.flush()
 
 
@@ -80,14 +138,19 @@ class Config:
         base = env("ARK_BASE_DIR")
         # Fallback pro rucni spousteni mimo AMP: supervisor/ je pod base dir.
         self.base = Path(base) if base else HERE.parent
-        self.game = self.base / "376030"
-        self.binary = self.game / "ShooterGame/Binaries/Linux/ShooterGameServer"
+        self.game = self.base / PROFILE["app_dir"]
+        self.binary = self.game / PROFILE["binary"]
+        # Win64 na Linuxu je symlink na Linux (update krok sablony), na Windows
+        # je to skutecny adresar binarek.
         self.workdir = self.game / "ShooterGame/Binaries/Win64"
-        self.config_dir = self.game / "ShooterGame/Saved/Config/LinuxServer"
+        self.config_dir = self.game / "ShooterGame/Saved/Config" / PROFILE["config_subdir"]
         self.cluster_dir = self.base / "clusterdata"
         self.log_dir = self.base / "logs"
 
-        self.session_name = env("ARK_SESSION_NAME") or "ARK Cluster"
+        # '?' by v URL mapy zacal dalsi volbu, '"' by na Windows rozbil
+        # uvozovky kolem URL.
+        self.session_name = (re.sub(r'[?"]', "", env("ARK_SESSION_NAME")).strip()
+                             or "ARK Cluster")
         self.cluster_id = env("ARK_CLUSTER_ID") or "arkcluster"
         self.rcon_password = env("ARK_RCON_PASSWORD")
         self.server_password = env("ARK_SERVER_PASSWORD")
@@ -134,9 +197,14 @@ class Config:
 def physical_cores():
     """Vrati seznam fyzickych jader jako mnoziny logickych CPU (vcetne SMT).
 
-    Cte se ze sysfs, ne z lscpu - je to spolehlivejsi a bez zavislosti na
-    formatu vystupu.
+    Linux: sysfs, ne lscpu - spolehlivejsi a bez zavislosti na formatu
+    vystupu. Windows: GetLogicalProcessorInformation.
     """
+    if IS_WINDOWS:
+        try:
+            return winapi.physical_cores()
+        except OSError:
+            return []
     cores = []
     seen = set()
     base = Path("/sys/devices/system/cpu")
@@ -166,11 +234,17 @@ def physical_cores():
 
 
 def assign_cores(map_names):
-    """Kazda mapa dostane vlastni fyzicke jadro. Zadne dve nesdileji vlakno."""
+    """Kazda mapa dostane vlastni fyzicka jadra - ferovy dil volnych jader.
+
+    Souvisly blok, protoze sousedni jadra byvaji ve stejnem CCX (spolecna L3).
+    Dokud je jader aspon tolik co map, zadne dve mapy nesdileji jadro.
+    Puvodne mela kazda mapa jedno jadro; ASA (UE5) je ale vic vlaknova a na
+    Windows si pocet vlaken bere ze VSECH jader stroje ("Number of cores 32"
+    i pri pinningu) - na dvou logickych CPU by se tlacila."""
     # Jen CPU, ktere proces smi pouzit - v kontejneru AMP s omezenym cpusetem
     # by jinak pinning mohl mirit na zakazana jadra a selhat.
     try:
-        allowed = os.sched_getaffinity(0)
+        allowed = winapi.allowed_cpus() if IS_WINDOWS else os.sched_getaffinity(0)
     except OSError:
         allowed = None
     cores = physical_cores()
@@ -184,30 +258,89 @@ def assign_cores(map_names):
     if len(pool) < len(map_names):
         log(f"VAROVANI: {len(map_names)} map na {len(pool)} fyzickych jader - "
             f"nektere se o jadro podeli")
-    return {name: pool[i % len(pool)] for i, name in enumerate(map_names)}
+        return {name: pool[i % len(pool)] for i, name in enumerate(map_names)}
+    # Zbytek po deleni dostanou prvni mapy - zadne jadro nezustane ladem.
+    share, extra = divmod(len(pool), len(map_names))
+    out, first = {}, 0
+    for i, name in enumerate(map_names):
+        size = share + (1 if i < extra else 0)
+        out[name] = set().union(*pool[first:first + size])
+        first += size
+    return out
 
 
-def proc_rss_kb(pid):
-    """VmRSS procesu v kB, 0 kdyz proces neni."""
+def cpu_list(cpus):
+    """{2, 3, 4, 5, 9} -> '2-5,9' - do logu a statusu, i pro 20 CPU na mapu."""
+    runs, out = [], []
+    for cpu in sorted(cpus):
+        if runs and cpu == runs[-1][1] + 1:
+            runs[-1][1] = cpu
+        else:
+            runs.append([cpu, cpu])
+    for first, last in runs:
+        out.append(str(first) if first == last else f"{first}-{last}")
+    return ",".join(out)
+
+
+def udp_port_busy(port, host="0.0.0.0"):
+    """Drzi UDP port uz nekdo? U UDP neni TIME_WAIT, takze test bindem
+    nesplete dobehle spojeni s bezicim serverem."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        with open(f"/proc/{pid}/status") as handle:
+        sock.bind((host, port))
+        return False
+    except OSError:
+        return True
+    finally:
+        sock.close()
+
+
+def win_command_line(args):
+    """Prikazova radka pro CreateProcess.
+
+    subprocess.list2cmdline by do uvozovek uzavrel cely prepinac
+    '-Klic=hodnota s mezerou'. UE ale hodnotu cte od '=' do prvni mezery,
+    pokud sama nezacina uvozovkou - z -ClusterDirOverride by zbyl kus cesty.
+    Proto -Klic="hodnota". Ostatni (exe, URL mapy) list2cmdline - URL s
+    mezerou v SessionName tak projde (overeno v94.15).
+    """
+    out = []
+    for arg in args:
+        key, sep, value = arg.partition("=")
+        if (arg.startswith("-") and sep and '"' not in value
+                and any(ch.isspace() for ch in value)):
+            out.append(f'{key}="{value}"')
+        else:
+            out.append(subprocess.list2cmdline([arg]))
+    return " ".join(out)
+
+
+_CLK_TCK = None if IS_WINDOWS else os.sysconf("SC_CLK_TCK")
+
+
+def proc_stats(proc):
+    """(RAM v kB, spotrebovane CPU v sekundach) procesu, nebo (0, None)."""
+    if proc is None:
+        return 0, None
+    if IS_WINDOWS:
+        try:
+            return winapi.process_stats(proc._handle)
+        except (OSError, AttributeError, ValueError):
+            return 0, None
+    rss_kb, cpu = 0, None
+    try:
+        with open(f"/proc/{proc.pid}/status") as handle:
             for line in handle:
                 if line.startswith("VmRSS:"):
-                    return int(line.split()[1])
-    except (OSError, ValueError, IndexError):
-        pass
-    return 0
-
-
-def proc_cpu_ticks(pid):
-    """utime + stime procesu (vsechna vlakna) v tikach hodin, None kdyz neni."""
-    try:
-        with open(f"/proc/{pid}/stat") as handle:
+                    rss_kb = int(line.split()[1])
+                    break
+        with open(f"/proc/{proc.pid}/stat") as handle:
             # comm muze obsahovat mezery i zavorky - delit az za posledni ')'.
             fields = handle.read().rsplit(")", 1)[1].split()
-        return int(fields[11]) + int(fields[12])
+        cpu = (int(fields[11]) + int(fields[12])) / _CLK_TCK
     except (OSError, ValueError, IndexError):
-        return None
+        pass
+    return rss_kb, cpu
 
 
 # ListPlayers: "0. Jmeno, 76561198012345678" - u crossplay muze byt misto
@@ -329,7 +462,8 @@ def load_server_settings():
             value = value.strip()
             # Mezera prikazovou radku utne, '?' ji rozdeli - oboji by tise
             # zahodilo vsechno za timhle klicem.
-            if not value or "?" in value or any(ch.isspace() for ch in value):
+            if (not value or "?" in value or '"' in value
+                    or any(ch.isspace() for ch in value)):
                 log(f"VAROVANI: {key}={value!r} vynechano - prazdne, s mezerou "
                     f"nebo '?' by rozbilo prikazovou radku")
                 continue
@@ -381,10 +515,20 @@ class MapServer:
         r"^(?:Commandline:|Log file open|Number of cores|ADayCycleManager"
         r"|Server attempting to run new years|Sever Is not set to official"
         r"|Set New Years event location|SteamSocketsOpenSource: gethostname failed"
-        r"|gethostbyname failed)")
-    # Na tenhle radek logu se pozna, ze mapa nabehla - za 30-40 s a nezavisle
-    # na RCON, ktery nabiha o chvili pozdeji a pri zatezi umi byt pomaly.
-    STARTED_RE = re.compile(r'^Server: ".*" has successfully started!')
+        r"|gethostbyname failed"
+        # ASA: statistiky pameti a nastaveni CurseForge pri startu (i jeho
+        # JSON), poznamky. Varovani a chyby LogMemory/LogCFCore projdou.
+        r"|LogMemory: (?:Platform Memory Stats|Process Physical Memory:"
+        r"|Process Virtual Memory:|Physical Memory:|Virtual Memory:)"
+        r"|LogCFCore: (?:InternalSettings called|Detected OS)"
+        r'|Added Explorer Note Entry|\d+$|[{}]$|")')
+    # ASA sype na stdout analytiku (GameAnalytics) a kazdou minutu JSON
+    # s vykonem, rozsekany a promichany mezi vlakny - ~65 radku za minutu na
+    # mapu. Do konzole ani do logs/ nepatri.
+    STDOUT_DROP = re.compile(r'GameAnalytics|^\s*["{}]|^\s*[\[\]]+,?\s*$')
+    # Na tenhle radek logu se pozna, ze mapa nabehla - nezavisle na RCON,
+    # ktery pri zatezi umi byt pomaly. Lisi se podle hry, viz GAMES.
+    STARTED_RE = re.compile(PROFILE["started_re"])
     LOG_PREFIX = re.compile(r"^\[\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}:\d{3}\]\[\s*\d+\]")
 
     def __init__(self, name, index, cfg, cores):
@@ -397,10 +541,11 @@ class MapServer:
         # -log=<Mapa>.log - viz command_line.
         self.log_file = cfg.game / "ShooterGame/Saved/Logs" / f"{name}.log"
         rcon_host = cfg.bind_ip if cfg.multihome else "127.0.0.1"
-        self.rcon = RconClient(rcon_host, self.ports["rcon"], cfg.rcon_password)
+        self.rcon = RconClient(rcon_host, self.ports["rcon"], cfg.rcon_password,
+                               terminator=PROFILE["rcon_terminator"])
         self.ready = False
         self._ready_at = 0.0
-        # Nastavi cteni logu na "Server: ... has successfully started!".
+        # Nastavi cteni logu na radek STARTED_RE.
         self.started = threading.Event()
         self.restarts = 0
         self.started_at = 0.0
@@ -409,6 +554,8 @@ class MapServer:
         # miste - ctenari (status, whereis, metriky) pak iteruji bez zamku.
         self.players = {}
         self._reader = None
+        # Windows: job object mapy (KILL_ON_JOB_CLOSE + pinning), viz winapi.
+        self._job = None
         # Zamysleny stav. Bez nej by hlidac po 30 s vratil mapu, kterou
         # obsluha zamerne zastavila.
         self.desired_up = False
@@ -423,15 +570,19 @@ class MapServer:
         # v361.7: bez ServerAdminPassword na radce se RCON port vubec neotevre
         # a ServerPassword jen z GameUserSettings.ini nechal server verejny.
         # Obrana je na urovni systemu (mount /proc s hidepid=2).
-        opts = [
-            self.name,
-            "listen",
-            f"Port={self.ports['game']}",
-            f"QueryPort={self.ports['query']}",
+        opts = [self.name, "listen", f"Port={self.ports['game']}"]
+        if GAME == "ase":
+            # ASA bere query port jen z -QueryPort= (viz nize).
+            opts.append(f"QueryPort={self.ports['query']}")
+        opts += [
             "RCONEnabled=True",
             f"RCONPort={self.ports['rcon']}",
             f"ServerAdminPassword={self.cfg.rcon_password}",
-            f"MaxPlayers={self.cfg.max_players}",
+        ]
+        if GAME == "ase":
+            # ASA bere pocet hracu z -WinLiveMaxPlayers (viz nize).
+            opts.append(f"MaxPlayers={self.cfg.max_players}")
+        opts += [
             # Kazda mapa MUSI mit vlastni save adresar, jinak si prepisou svet.
             f"AltSaveDirectoryName={self.name}",
             "RCONServerGameLogBuffer=600",
@@ -447,7 +598,7 @@ class MapServer:
             extra = extra.strip()
             if not extra:
                 continue
-            if any(ch.isspace() for ch in extra):
+            if '"' in extra or any(ch.isspace() for ch in extra):
                 emit(self.name, f"VAROVANI: vlastni volba {extra!r} vynechana - "
                                 f"mezera by prikazovou radku utnula")
                 continue
@@ -462,9 +613,23 @@ class MapServer:
         args += [
             f"-ClusterDirOverride={self.cfg.cluster_dir}",
             f"-clusterid={self.cfg.cluster_id}",
-            "-AutoManagedMods",
-            "-Crossplay",
-            "-server",
+        ]
+        if GAME == "asa":
+            # ?Port= v URL ASA ignoruje: mapa zkusi vychozi 7777, a kdyz je
+            # obsazeny, vezme tise dalsi volny (overeno v94.15 - Ragnarok s
+            # Port=7789 skoncil na 7779). Herni port jen pres -port=.
+            # ?QueryPort= taky ne: Steam subsystem (overeni hracu ze Steamu,
+            # servery se jinak hledaji pres EOS) pak u vsech map chce 27015
+            # a uspeje jen prvni ("Steam Subsystem initialized: FAILED").
+            # Dal jako upstream sablona CubeCoders ark-sa: pocet hracu,
+            # crossplay vsech platforem, bez BattlEye.
+            args += [f"-port={self.ports['game']}",
+                     f"-QueryPort={self.ports['query']}",
+                     f"-WinLiveMaxPlayers={self.cfg.max_players}",
+                     "-ServerPlatform=ALL", "-NoBattlEye"]
+        else:
+            args += ["-AutoManagedMods", "-Crossplay", "-server"]
+        args += [
             # Vlastni log pro kazdou mapu - jinak 13 map pise do jednoho
             # ShooterGame.log a kazdy start ho prejmenuje na zalohu.
             f"-log={self.name}.log",
@@ -496,6 +661,15 @@ class MapServer:
         self.players = {}
 
         args = self.command_line(preset_rates)
+        bind = self.cfg.bind_ip if self.cfg.multihome else "0.0.0.0"
+        busy = [port for port in (self.ports["game"], self.ports["query"])
+                if udp_port_busy(port, bind)]
+        if busy:
+            # Druha kopie mapy by bezela nad stejnym savem; ASA by si navic
+            # tise vzala jiny port (overeno), takze by o ni nikdo nevedel.
+            emit(self.name, f"CHYBA: UDP port {busy[0]} uz nekdo drzi - nebezi tu "
+                            f"mapa z minuleho behu? Start vynechan.")
+            return
         old_log = self._log_identity()
         emit(self.name, f"start na portech game={self.ports['game']} "
                         f"query={self.ports['query']} rcon={self.ports['rcon']}")
@@ -505,23 +679,29 @@ class MapServer:
         # okamzik prisprendli volajici vlakno a server se narodi uz pripnuty,
         # vcetne vsech svych budoucich vlaken.
         restore = None
-        if self.cfg.cpu_pinning and self.cores:
+        if self.cfg.cpu_pinning and self.cores and not IS_WINDOWS:
             try:
                 restore = os.sched_getaffinity(0)
                 os.sched_setaffinity(0, self.cores)
             except OSError as exc:
                 restore = None
                 emit(self.name, f"VAROVANI: pinning selhal: {exc}")
+        if self._job:
+            # Proces v nem uz nebezi (viz self.running vyse).
+            winapi.close_handle(self._job)
+            self._job = None
         try:
             self.proc = subprocess.Popen(
-                args,
+                win_command_line(args) if IS_WINDOWS else args,
                 cwd=str(self.cfg.workdir),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
                 bufsize=1,
-                text=True,
+                encoding="utf-8",
                 errors="replace",
+                creationflags=(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+                               if IS_WINDOWS else 0),
             )
         finally:
             if restore is not None:
@@ -530,7 +710,18 @@ class MapServer:
                 except OSError:
                     pass
         if restore is not None:
-            emit(self.name, f"pin na CPU {sorted(self.cores)}")
+            emit(self.name, f"pin na CPU {cpu_list(self.cores)}")
+        elif IS_WINDOWS:
+            # Na Windows plati limit jobu pro cely proces vcetne vlaken, co uz
+            # bezi - staci hned po startu. Viz winapi.bind_to_job.
+            cpus = self.cores if self.cfg.cpu_pinning and self.cores else None
+            try:
+                self._job = winapi.bind_to_job(self.proc._handle, cpus)
+                if cpus:
+                    emit(self.name, f"pin na CPU {cpu_list(cpus)}")
+            except (OSError, AttributeError) as exc:
+                emit(self.name, f"VAROVANI: job object selhal - bez pinningu a bez "
+                                f"ukonceni mapy pri padu supervisoru: {exc}")
 
         self._reader = threading.Thread(target=self._pump_output, daemon=True)
         self._reader.start()
@@ -607,19 +798,23 @@ class MapServer:
         """Cte vystup serveru a normalizuje ho na format, ktery ceka AMP."""
         log_path = self.cfg.log_dir / f"{self.name}.log"
         try:
-            handle = open(log_path, "a", errors="replace")
+            handle = open(log_path, "a", encoding="utf-8", errors="replace")
         except OSError:
             handle = None
         try:
             for raw in self.proc.stdout:
                 line = raw.rstrip("\n")
+                # Herni log na stdout NENI (ASE v361.7: dva radky ze Steam API,
+                # ASA: analytika, JSON a par radku zdvojenych s logem) - hraci
+                # jdou z ListPlayers, viz players_loop. LOG_DROP i tady: hesla
+                # z "Commandline:" nesmi ven, ani kdyby ho server vypsal sem.
+                if (not line.strip() or self.STDOUT_DROP.search(line)
+                        or self.LOG_DROP.match(line.strip())):
+                    continue
                 if handle:
                     handle.write(line + "\n")
                     handle.flush()
-                # Herni log na stdout NENI (v361.7 tu jsou jen dva radky ze
-                # Steam API) - hraci jdou z ListPlayers, viz players_loop.
-                if line.strip():
-                    emit(self.name, line)
+                emit(self.name, line)
         except (OSError, ValueError):
             pass
         finally:
@@ -652,17 +847,18 @@ class MapServer:
             self.ready = False
             return False
 
-    def wait_ready(self, timeout):
+    def wait_ready(self, timeout, abort=None):
         """Ceka, az mapa nabehne: radek v logu, nebo odpoved RCON.
 
-        Log je spolehlivy (30-40 s) a nezavisly na RCON. Funkce zavisle na
-        RCON (chat, hraci) si ho overuji samy - players_loop drzi "ready".
+        Log je spolehlivy a nezavisly na RCON. Funkce zavisle na RCON (chat,
+        hraci) si ho overuji samy - players_loop drzi "ready".
         """
         deadline = time.time() + timeout
         next_probe = 0.0
         while time.time() < deadline:
-            # Vypinani (stop nastavi desired_up=False) - necekat dal na start.
-            if not self.desired_up:
+            # Vypinani mapy (stop nastavi desired_up=False) nebo celeho clusteru
+            # - necekat dal na start, stop_all by jinak cekal na nas.
+            if not self.desired_up or (abort is not None and abort.is_set()):
                 return False
             if not self.running:
                 emit(self.name, "CHYBA: proces skoncil driv, nez nabehl")
@@ -688,36 +884,90 @@ class MapServer:
             self._stop_locked(fixes, save_timeout, deadline)
 
     def _stop_locked(self, fixes, save_timeout, deadline=None):
-        """Zebrik: uklid -> SIGINT -> SIGKILL.
+        """Zebrik: uklid -> korektni konec -> tvrde ukonceni.
 
-        SIGINT ARK svet ulozi a do par sekund skonci (overeno na v361.7, 7/7)
-        a funguje, i kdyz RCON neodpovida. RCON SaveWorld se sem zamerne
-        nedava: ARK po nem RCON obcas na minuty umlci (viz README) a SIGINT
-        uklada tak jako tak.
+        Linux (ASE): SIGINT - ARK pri nem svet ulozi a do par sekund skonci
+        (overeno na v361.7, 7/7) a funguje, i kdyz RCON neodpovida.
+        Windows (ASA): signal se tam poslat neda, korektni konec je RCON
+        DoExit - ARK pri nem svet ulozi (stejne vypina upstream sablona ark-sa).
         """
         # Nastavit i kdyz uz mapa nebezi - jinak by ji hlidac zvedl zpatky.
         self.desired_up = False
         if not self.running:
             return
+        rcon_ok = self.probe_ready()
+        cleaned = False
         if fixes:
-            if self.probe_ready():
-                self._run_fixes(fixes, save_timeout, deadline)
+            if rcon_ok:
+                cleaned = self._run_fixes(fixes, save_timeout, deadline)
             else:
                 emit(self.name, "RCON neodpovida - uklid vynechan")
+        if IS_WINDOWS:
+            self._exit_windows(rcon_ok, cleaned, save_timeout, deadline)
+            return
         # ARK posloucha na SIGINT, ne SIGTERM; pri nem svet ulozi.
         emit(self.name, "posilam SIGINT (ARK pri nem svet ulozi)")
         self._signal(signal.SIGINT)
-        wait = save_timeout
-        if deadline is not None:
-            # SIGKILL ze stop_all prijde po deadline - do te doby to musi stihnout.
-            wait = max(5, min(save_timeout, deadline - time.time() - 5))
-        if self._wait_exit(wait):
+        if self._wait_exit(self._exit_wait(save_timeout, deadline)):
             emit(self.name, "ukonceno korektne")
             return
-        emit(self.name, "CHYBA: nereaguje ani na SIGINT, SIGKILL "
+        emit(self.name, "CHYBA: nereaguje ani na SIGINT, tvrde ukonceni "
                         "(svet muze byt starsi)")
-        self._signal(signal.SIGKILL)
+        self._kill()
         self._wait_exit(15)
+
+    def _loaded(self):
+        """Nabehla mapa od posledniho startu aspon jednou (log nebo RCON)?"""
+        return self.started.is_set() or self._ready_at >= self.started_at
+
+    def _exit_windows(self, rcon_ok, cleaned, save_timeout, deadline):
+        if not rcon_ok and not self._loaded():
+            # Svet se jeste nacita (RCON odpovida az po "Full Startup") - neni
+            # co ukladat a cekani by stop nebo restart protahlo o minuty.
+            emit(self.name, "jeste nenabehla - neni co ukladat, ukoncuji")
+            self._kill()
+            self._wait_exit(15)
+            return
+        if not rcon_ok:
+            # Mozna jen chvilkove pomaly - bez RCON se mapa korektne vypnout
+            # neda. Nejvys minutu a tak, aby pred koncem rozpoctu zbyl cas.
+            limit = time.time() + 60
+            if deadline is not None:
+                limit = min(limit, deadline - 30)
+            while self.running and time.time() < limit:
+                time.sleep(max(0.0, min(10.0, limit - time.time())))
+                if self.probe_ready(cache=0.0):
+                    break
+        if not self.running:
+            emit(self.name, "ukoncena")
+            return
+        if self.probe_ready():
+            if cleaned:
+                # Tezky prikaz par sekund po jinem tezkem ARK nevezme.
+                emit(self.name, f"cekam {self.FIX_SPACING} s po uklidu")
+                time.sleep(self.FIX_SPACING)
+            try:
+                reply = self.rcon.command("DoExit", timeout=30)
+                emit(self.name, f"DoExit: {reply or '(prazdna odpoved)'}")
+            except (RconError, OSError) as exc:
+                emit(self.name, f"VAROVANI: DoExit selhal: {exc}")
+            if self._wait_exit(self._exit_wait(save_timeout, deadline)):
+                emit(self.name, "ukonceno korektne")
+                return
+            emit(self.name, "CHYBA: neskoncila, tvrde ukonceni (svet muze byt starsi)")
+        else:
+            # Bez DoExit sama neskonci - cekat na ni by jen protahlo vypinani.
+            emit(self.name, "CHYBA: RCON neodpovida, korektni konec neni mozny - "
+                            "tvrde ukonceni (svet muze byt starsi)")
+        self._kill()
+        self._wait_exit(15)
+
+    @staticmethod
+    def _exit_wait(save_timeout, deadline):
+        """Jak dlouho cekat na konec - tvrde ukonceni ze stop_all prijde po deadline."""
+        if deadline is None:
+            return save_timeout
+        return max(5, min(save_timeout, deadline - time.time() - 5))
 
     # Rozestup mezi tezkymi prikazy uklidu. Overeno na v361.7: tezky prikaz
     # (DestroyWildDinos, DestroyAll, SaveWorld) poslany par sekund po jinem
@@ -732,12 +982,13 @@ class MapServer:
         RCON neodpovida a kazdy dalsi by jen protahl vypinani o svuj timeout.
         Uklid se zkrati i tehdy, kdyby jinak nezbyl cas na korektni SIGINT.
         """
+        done = False
         for position, cmd in enumerate(commands):
             if deadline is not None and (time.time() + self.FIX_SPACING + 15
                                          + save_timeout > deadline):
                 emit(self.name, "zbytek uklidu vynechan - nezbyl by cas "
                                 "na korektni vypnuti")
-                return
+                return done
             if position:
                 emit(self.name, f"cekam {self.FIX_SPACING} s pred dalsim uklidem")
                 time.sleep(self.FIX_SPACING)
@@ -746,13 +997,23 @@ class MapServer:
             except (RconError, OSError) as exc:
                 emit(self.name, f"FIX SELHAL {cmd!r}: {exc} - zbytek uklidu "
                                 f"vynechan, RCON neodpovida")
-                return
+                return done
+            done = True
             # Preklep v nazvu tridy tise nedela nic - proto se loguje odpoved.
             emit(self.name, f"FIX {cmd} -> {reply or '(prazdna odpoved)'}")
+        return done
 
     def _signal(self, sig):
+        """Jen POSIX - na Windows send_signal SIGINT nepodporuje."""
         try:
             self.proc.send_signal(sig)
+        except (OSError, AttributeError, ValueError):
+            pass
+
+    def _kill(self):
+        """Tvrde ukonceni: SIGKILL na Linuxu, TerminateProcess na Windows."""
+        try:
+            self.proc.kill()
         except (OSError, AttributeError):
             pass
 
@@ -847,7 +1108,7 @@ class Supervisor:
             # wait_ready zamerne MIMO zamek - blokuje az ready_timeout a
             # nesmi tim drzet pripadne vypinani.
             if started:
-                server.wait_ready(self.cfg.ready_timeout)
+                server.wait_ready(self.cfg.ready_timeout, self.stopping)
             # Prodleva az mezi mapami, ne po posledni.
             if position < len(self.maps) - 1 and self.cfg.start_delay:
                 log(f"cekam {self.cfg.start_delay} s pred dalsi mapou")
@@ -907,8 +1168,8 @@ class Supervisor:
         # na kazde ceste ven.
         for server in self.maps.values():
             if server.running:
-                emit(server.name, "CHYBA: nedobehla v rozpoctu, SIGKILL")
-                server._signal(signal.SIGKILL)
+                emit(server.name, "CHYBA: nedobehla v rozpoctu, tvrde ukonceni")
+                server._kill()
                 server._wait_exit(10)
             try:
                 server.rcon.close()
@@ -934,7 +1195,7 @@ class Supervisor:
             server.restarts = 0
             started = self._safe_start(server)
         if started:
-            server.wait_ready(self.cfg.ready_timeout)
+            server.wait_ready(self.cfg.ready_timeout, self.stopping)
 
     # --- smycky na pozadi ---
 
@@ -978,7 +1239,7 @@ class Supervisor:
                     finally:
                         server._lock.release()
                 if started:
-                    server.wait_ready(self.cfg.ready_timeout)
+                    server.wait_ready(self.cfg.ready_timeout, self.stopping)
 
     def chat_loop(self):
         """Chat z map do konzole AMP; s CrossChat i mezi mapami (misto Cross-Ark-Chat)."""
@@ -992,11 +1253,11 @@ class Supervisor:
                     continue
                 for line in chat.splitlines():
                     line = line.strip()
-                    # Vlastni preposlana zprava se vraci zpet v GetChat.
-                    # Bez tehle zabrany by se chat mezi mapami lavinovite
-                    # rozmnozil. RELAY_MARK je znak, ktery hrac do chatu
-                    # nenapise.
-                    if not line or RELAY_MARK in line or line.startswith("SERVER:"):
+                    # Vlastni preposlana zprava se vraci zpet v GetChat jako
+                    # "SERVER: ..." (overeno v94.15) a regex v _relay ji nechyti
+                    # ani jinak - chybi "(Postava)". Bez toho by se chat mezi
+                    # mapami lavinovite rozmnozil.
+                    if not line or line.startswith("SERVER:"):
                         continue
                     self._relay(server, line)
 
@@ -1013,7 +1274,7 @@ class Supervisor:
         emit(origin.name, f"<{player}> {message}")
         if not self.cfg.cross_chat:
             return
-        payload = f"{RELAY_MARK}[{origin.name}] {player}: {message}"
+        payload = chat_text(f"[{origin.name}] {player}: {message}")
         for server in self.maps.values():
             if server is origin or not server.ready or not server.running:
                 continue
@@ -1026,8 +1287,7 @@ class Supervisor:
         # AMP meri jen proces supervisoru (App.MonitorChildProcess umi jedno
         # dite, ne 13), takze jeho grafy CPU a RAM by ukazovaly skoro nulu.
         # Soucet za mapy si proto supervisor meri sam a posila ho v METRICS.
-        tick = os.sysconf("SC_CLK_TCK")
-        last = {}                            # pid -> (tiky, cas)
+        last = {}                            # pid -> (CPU sekundy, cas)
         while not self.stopping.wait(60):
             up, rss_kb, cpu = 0, 0, 0.0
             now = time.time()
@@ -1037,13 +1297,13 @@ class Supervisor:
                     continue
                 up += 1
                 pid = server.proc.pid
-                rss_kb += proc_rss_kb(pid)
-                ticks = proc_cpu_ticks(pid)
-                if ticks is None:
+                map_rss, map_cpu = proc_stats(server.proc)
+                rss_kb += map_rss
+                if map_cpu is None:
                     continue
-                seen[pid] = (ticks, now)
+                seen[pid] = (map_cpu, now)
                 if pid in last and now > last[pid][1]:
-                    cpu += (ticks - last[pid][0]) / tick / (now - last[pid][1])
+                    cpu += (map_cpu - last[pid][0]) / (now - last[pid][1])
             last = seen
             players = sum(len(s.players) for s in self.maps.values())
             # Na tenhle radek cili Console.MetricsRegex - z toho jsou grafy v AMP.
@@ -1068,14 +1328,18 @@ class Supervisor:
                         self._diff_players(server, {})
                     continue
                 try:
-                    now = parse_players(server.rcon.command("ListPlayers", timeout=5))
+                    reply = server.rcon.command("ListPlayers", timeout=5)
                 except (RconError, OSError):
                     server.ready = False
                     continue          # stav nevime - seznam nemenit
                 # Mapa nabehla podle logu, ale RCON se overuje az tady - bez
                 # toho by ready zustalo False a chat ani hraci by se nerozjeli.
                 server.ready, server._ready_at = True, time.time()
-                self._diff_players(server, now)
+                if not reply:
+                    # Prazdna odpoved neni "nikdo tu neni" - prazdny server pise
+                    # "No Players Connected". Jinak by vsichni odesli a vratili se.
+                    continue
+                self._diff_players(server, parse_players(reply))
 
     @staticmethod
     def _diff_players(server, now):
@@ -1144,13 +1408,13 @@ class Supervisor:
             self._restart_one(args[0])
         elif cmd == "broadcast" and rest:
             msg = args[0] if len(args) == 1 else rest
-            self.cmd_all_rcon(f"Broadcast {msg}", quiet=True)
+            self.cmd_all_rcon(f"Broadcast {chat_text(msg)}", quiet=True)
             log(f"broadcast: {msg}")
         elif cmd == "say" and len(args) >= 2:
             server = self.find(args[0])
             if server:
                 msg = args[1] if len(args) == 2 else self._drop_token(rest)
-                server.rcon.command(f"ServerChat {msg}")
+                server.rcon.command(f"ServerChat {chat_text(msg)}")
         elif cmd == "rcon" and len(args) >= 2:
             self.cmd_rcon(args[0], args[1] if len(args) == 2
                           else self._drop_token(rest))
@@ -1202,8 +1466,8 @@ class Supervisor:
                 state, pid = "SPADLA", "-"     # hlidac ji zvedne
             else:
                 state, pid = "STOJI", "-"      # zastavena zamerne
-            cores = sorted(server.cores) if server.cores else "-"
-            ram = (f"{proc_rss_kb(server.proc.pid) / 1048576:.1f}G"
+            cores = cpu_list(server.cores) if server.cores else "-"
+            ram = (f"{proc_stats(server.proc)[0] / 1048576:.1f}G"
                    if server.running else "-")
             log(f"  {server.name:<16} {state:<9} pid={pid:<8} "
                 f"game={server.ports['game']} hracu={len(server.players)} "
@@ -1235,7 +1499,7 @@ class Supervisor:
             server.restarts = 0
             started = self._safe_start(server)
         if started:
-            server.wait_ready(self.cfg.ready_timeout)
+            server.wait_ready(self.cfg.ready_timeout, self.stopping)
 
     def _stop_one(self, name):
         server = self.find(name)
@@ -1367,17 +1631,32 @@ class Supervisor:
 # --------------------------------------------------------------------------
 
 def main():
+    # UTF-8 nezavisle na systemu: na Windows by Python u roury vzal kodovou
+    # stranku (cp1250/cp1252) a jmena hracu i prikazy s diakritikou by se
+    # rozbily; znak mimo stranku by shodil vypis i vlakno, ktere ho psalo.
+    # stdin s -sig: kdyby AMP poslal na zacatek BOM, prvni prikaz by neprosel.
+    for stream, encoding in ((sys.stdout, "utf-8"), (sys.stderr, "utf-8"),
+                             (sys.stdin, "utf-8-sig")):
+        try:
+            stream.reconfigure(encoding=encoding, errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+    if GAME not in GAMES:
+        log(f"CHYBA: neznama hra ARK_GAME={GAME!r}, znam: {', '.join(GAMES)}")
+        return 1
     cfg = Config()
 
     # ARK po kazdem korektnim vypnuti (SIGINT) uz po ulozeni spadne na
     # SIGABRT (overeno 3/3 na v361.7). Bez tohohle by kazdy restart mapy
     # nechal core dump o velikosti jeji RAM - pres systemd-coredump ~1,3 GB,
-    # jako soubor 'core' v adresari serveru ~6 GB. Mapy limit zdedi.
-    try:
-        _, hard = resource.getrlimit(resource.RLIMIT_CORE)
-        resource.setrlimit(resource.RLIMIT_CORE, (0, hard))
-    except (ValueError, OSError):
-        pass
+    # jako soubor 'core' v adresari serveru ~6 GB. Mapy limit zdedi. (POSIX)
+    if resource is not None:
+        try:
+            _, hard = resource.getrlimit(resource.RLIMIT_CORE)
+            resource.setrlimit(resource.RLIMIT_CORE, (0, hard))
+        except (ValueError, OSError):
+            pass
 
     selected, unknown = [], []
     for arg in sys.argv[1:]:
@@ -1401,11 +1680,13 @@ def main():
         return 1
     for label, value in (("RCON Password", cfg.rcon_password),
                          ("Server Password", cfg.server_password)):
-        if value and ("?" in value or any(ch.isspace() for ch in value)):
+        if value and ("?" in value or '"' in value
+                      or any(ch.isspace() for ch in value)):
             # ARK prikazovou radku u mezery utne a zbytek tise zahodi - server
-            # by mohl bezet bez hesla a bez jmena. Radsi nespustit vubec.
-            log(f"CHYBA: {label} obsahuje mezeru nebo '?' - zmen ho v nastaveni "
-                f"instance. ARK by prikazovou radku u nej utnul.")
+            # by mohl bezet bez hesla a bez jmena. Uvozovky by na Windows
+            # rozbily uvozovky kolem URL mapy. Radsi nespustit vubec.
+            log(f"CHYBA: {label} obsahuje mezeru, '?' nebo uvozovky - zmen ho "
+                f"v nastaveni instance. ARK by prikazovou radku u nej utnul.")
             return 1
     # Kanonicke poradi, ne poradi argumentu - porty musi sedet s ports.json.
     selected.sort(key=CANONICAL_MAPS.index)

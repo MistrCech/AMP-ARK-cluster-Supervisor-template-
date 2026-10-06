@@ -1,0 +1,245 @@
+[
+    {
+        "Protocol": "UDP",
+        "Port": 7777,
+        "Ref": "GamePort",
+        "Name": "Game Port - TheIsland_WP",
+        "Description": "Herni provoz prvni mapy; dalsi mapy jsou odvozene offsetem 2 (ASA bere jen tenhle jeden UDP port)",
+        "ChildPorts": [
+            {
+                "Protocol": "UDP",
+                "Port": 7779,
+                "Offset": 2,
+                "Ref": "GamePort1",
+                "Name": "Game Port - ScorchedEarth_WP",
+                "Description": "Herni provoz mapy ScorchedEarth_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 7781,
+                "Offset": 4,
+                "Ref": "GamePort2",
+                "Name": "Game Port - TheCenter_WP",
+                "Description": "Herni provoz mapy TheCenter_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 7783,
+                "Offset": 6,
+                "Ref": "GamePort3",
+                "Name": "Game Port - Aberration_WP",
+                "Description": "Herni provoz mapy Aberration_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 7785,
+                "Offset": 8,
+                "Ref": "GamePort4",
+                "Name": "Game Port - Extinction_WP",
+                "Description": "Herni provoz mapy Extinction_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 7787,
+                "Offset": 10,
+                "Ref": "GamePort5",
+                "Name": "Game Port - Astraeos_WP",
+                "Description": "Herni provoz mapy Astraeos_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 7789,
+                "Offset": 12,
+                "Ref": "GamePort6",
+                "Name": "Game Port - Ragnarok_WP",
+                "Description": "Herni provoz mapy Ragnarok_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 7791,
+                "Offset": 14,
+                "Ref": "GamePort7",
+                "Name": "Game Port - Valguero_WP",
+                "Description": "Herni provoz mapy Valguero_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 7793,
+                "Offset": 16,
+                "Ref": "GamePort8",
+                "Name": "Game Port - LostColony_WP",
+                "Description": "Herni provoz mapy LostColony_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 7795,
+                "Offset": 18,
+                "Ref": "GamePort9",
+                "Name": "Game Port - Genesis_WP",
+                "Description": "Herni provoz mapy Genesis_WP"
+            }
+        ]
+    },
+    {
+        "Protocol": "UDP",
+        "Port": 27015,
+        "Ref": "QueryPort",
+        "Name": "Query Port - TheIsland_WP",
+        "Description": "Steam subsystem prvni mapy (overeni hracu ze Steamu; servery se hledaji pres EOS)",
+        "ChildPorts": [
+            {
+                "Protocol": "UDP",
+                "Port": 27016,
+                "Offset": 1,
+                "Ref": "QueryPort1",
+                "Name": "Query Port - ScorchedEarth_WP",
+                "Description": "Steam subsystem mapy ScorchedEarth_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 27017,
+                "Offset": 2,
+                "Ref": "QueryPort2",
+                "Name": "Query Port - TheCenter_WP",
+                "Description": "Steam subsystem mapy TheCenter_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 27018,
+                "Offset": 3,
+                "Ref": "QueryPort3",
+                "Name": "Query Port - Aberration_WP",
+                "Description": "Steam subsystem mapy Aberration_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 27019,
+                "Offset": 4,
+                "Ref": "QueryPort4",
+                "Name": "Query Port - Extinction_WP",
+                "Description": "Steam subsystem mapy Extinction_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 27020,
+                "Offset": 5,
+                "Ref": "QueryPort5",
+                "Name": "Query Port - Astraeos_WP",
+                "Description": "Steam subsystem mapy Astraeos_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 27021,
+                "Offset": 6,
+                "Ref": "QueryPort6",
+                "Name": "Query Port - Ragnarok_WP",
+                "Description": "Steam subsystem mapy Ragnarok_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 27022,
+                "Offset": 7,
+                "Ref": "QueryPort7",
+                "Name": "Query Port - Valguero_WP",
+                "Description": "Steam subsystem mapy Valguero_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 27023,
+                "Offset": 8,
+                "Ref": "QueryPort8",
+                "Name": "Query Port - LostColony_WP",
+                "Description": "Steam subsystem mapy LostColony_WP"
+            },
+            {
+                "Protocol": "UDP",
+                "Port": 27024,
+                "Offset": 9,
+                "Ref": "QueryPort9",
+                "Name": "Query Port - Genesis_WP",
+                "Description": "Steam subsystem mapy Genesis_WP"
+            }
+        ]
+    },
+    {
+        "Protocol": "TCP",
+        "Port": 27100,
+        "Ref": "RCONPort",
+        "Name": "RCON Port - TheIsland_WP",
+        "Description": "RCON prvni mapy; supervisor se pripojuje na localhost",
+        "ChildPorts": [
+            {
+                "Protocol": "TCP",
+                "Port": 27101,
+                "Offset": 1,
+                "Ref": "RCONPort1",
+                "Name": "RCON Port - ScorchedEarth_WP",
+                "Description": "RCON mapy ScorchedEarth_WP (interni, supervisor)"
+            },
+            {
+                "Protocol": "TCP",
+                "Port": 27102,
+                "Offset": 2,
+                "Ref": "RCONPort2",
+                "Name": "RCON Port - TheCenter_WP",
+                "Description": "RCON mapy TheCenter_WP (interni, supervisor)"
+            },
+            {
+                "Protocol": "TCP",
+                "Port": 27103,
+                "Offset": 3,
+                "Ref": "RCONPort3",
+                "Name": "RCON Port - Aberration_WP",
+                "Description": "RCON mapy Aberration_WP (interni, supervisor)"
+            },
+            {
+                "Protocol": "TCP",
+                "Port": 27104,
+                "Offset": 4,
+                "Ref": "RCONPort4",
+                "Name": "RCON Port - Extinction_WP",
+                "Description": "RCON mapy Extinction_WP (interni, supervisor)"
+            },
+            {
+                "Protocol": "TCP",
+                "Port": 27105,
+                "Offset": 5,
+                "Ref": "RCONPort5",
+                "Name": "RCON Port - Astraeos_WP",
+                "Description": "RCON mapy Astraeos_WP (interni, supervisor)"
+            },
+            {
+                "Protocol": "TCP",
+                "Port": 27106,
+                "Offset": 6,
+                "Ref": "RCONPort6",
+                "Name": "RCON Port - Ragnarok_WP",
+                "Description": "RCON mapy Ragnarok_WP (interni, supervisor)"
+            },
+            {
+                "Protocol": "TCP",
+                "Port": 27107,
+                "Offset": 7,
+                "Ref": "RCONPort7",
+                "Name": "RCON Port - Valguero_WP",
+                "Description": "RCON mapy Valguero_WP (interni, supervisor)"
+            },
+            {
+                "Protocol": "TCP",
+                "Port": 27108,
+                "Offset": 8,
+                "Ref": "RCONPort8",
+                "Name": "RCON Port - LostColony_WP",
+                "Description": "RCON mapy LostColony_WP (interni, supervisor)"
+            },
+            {
+                "Protocol": "TCP",
+                "Port": 27109,
+                "Offset": 9,
+                "Ref": "RCONPort9",
+                "Name": "RCON Port - Genesis_WP",
+                "Description": "RCON mapy Genesis_WP (interni, supervisor)"
+            }
+        ]
+    }
+]

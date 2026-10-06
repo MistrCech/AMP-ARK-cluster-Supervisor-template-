@@ -4,6 +4,7 @@ __pycache__/
 
 # --- nize: existuje jen v instanci AMP, ne v repu ---
 376030/
+2430930/
 venv/
 logs/
 clusterdata/

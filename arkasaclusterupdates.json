@@ -1,0 +1,37 @@
+[
+    {
+        "UpdateStageName": "SteamCMD Server Download",
+        "UpdateSourcePlatform": "All",
+        "UpdateSource": "SteamCMD",
+        "UpdateSourceData": "2430930",
+        "UpdateSourceArgs": "2399830",
+        "UpdateSourceVersion": "{{ServerBranch}}",
+        "ForceDownloadPlatform": "Windows",
+        "SkipOnFailure": false
+    },
+    {
+        "UpdateStageName": "Config Directory Creation",
+        "UpdateSourcePlatform": "All",
+        "UpdateSource": "CreateDirectory",
+        "UpdateSourceArgs": "{{$FullBaseDir}}2430930/ShooterGame/Saved/Config/WindowsServer",
+        "OverwriteExistingFiles": false
+    },
+    {
+        "UpdateStageName": "Supervisor Download",
+        "UpdateSourcePlatform": "Windows",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "powershell.exe",
+        "UpdateSourceArgs": "-NoProfile -Command \"$ProgressPreference='SilentlyContinue'; cd arkasacluster; Remove-Item srv -Recurse -Force -ErrorAction SilentlyContinue | Out-Null; $DownloadSource = \\\"{{DownloadSource}}\\\"; $DownloadBranch = \\\"{{DownloadBranch}}\\\"; if (![string]::IsNullOrEmpty(\\\"{{DownloadUsername}}\\\")) { $DownloadUrl = $DownloadSource -replace \\\"https://\\\", \\\"https://{{DownloadUsername}}:{{DownloadPassword}}@\\\" } else { $DownloadUrl = \\\"$DownloadSource\\\" }; if (-Not (Test-Path .git)) { Write-Output \\\"Installing supervisor\\\"; git clone -q \\\"$DownloadUrl\\\" srv 1> $null; Copy-Item srv/* ./ -Recurse -Force -ErrorAction SilentlyContinue | Out-Null; Copy-Item srv/.git ./ -Recurse -Force -ErrorAction SilentlyContinue | Out-Null; Remove-Item srv -Recurse -Force -ErrorAction SilentlyContinue | Out-Null; if ([string]::IsNullOrEmpty($DownloadBranch)) { $DownloadBranch = (git symbolic-ref refs/remotes/origin/HEAD) -replace '.*/' }; git checkout -q --force $DownloadBranch 1> $null; if ($LASTEXITCODE -eq 0) { git pull -q 1> $null }; if ($LASTEXITCODE -eq 0) { Write-Output \\\"Supervisor installed\\\" } else { exit 1 } } else { Write-Output \\\"Updating supervisor\\\"; git remote set-url origin \\\"$DownloadUrl\\\" 1> $null; if ([string]::IsNullOrEmpty($DownloadBranch)) { $DownloadBranch = (git symbolic-ref refs/remotes/origin/HEAD) -replace '.*/' }; git checkout -q --force $DownloadBranch 1> $null; if ($LASTEXITCODE -eq 0) { git pull -q 1> $null }; if ($LASTEXITCODE -eq 0) { Write-Output \\\"Supervisor updated\\\" } else { exit 1 } }\"",
+        "UpdateSourceConditionSetting": "DownloadType",
+        "UpdateSourceConditionValue": "GitRepo",
+        "SkipOnFailure": false
+    },
+    {
+        "UpdateStageName": "Python Check",
+        "UpdateSourcePlatform": "Windows",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "cmd.exe",
+        "UpdateSourceArgs": "/C \"\"{{PythonExecutable}}\" -c \"import sys; sys.exit(sys.version_info < (3, 7))\" || (echo Error: Python nenalezen nebo je starsi nez 3.7 - uprav Python Executable v nastaveni instance. & exit /b 1)\"",
+        "SkipOnFailure": false
+    }
+]
