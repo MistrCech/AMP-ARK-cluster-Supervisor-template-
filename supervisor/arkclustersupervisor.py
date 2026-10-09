@@ -8,6 +8,7 @@ prazdno), zbytek konfigurace cte z promennych prostredi, ktere naplni sablona.
 
 Prikazy prijima na stdin - tim je konzole AMP zaroven ovladacim panelem.
 """
+import collections
 import configparser
 import json
 import os
@@ -79,8 +80,9 @@ GAMES = {
         # ASA na prazdny paket neodpovi a spojeni pak mlci uplne - viz rcon.py.
         "rcon_terminator": False,
         # ASA pise chat i do logu, v UTF-8 - GetChat vraci kodovou stranku
-        # systemu (cp1252: z c, r, e s hackem '?'). Prepnout na "log", az bude
-        # overeno, ze tam neni tribe chat - jinak by sel vsem a na Discord.
+        # systemu (z c, r, e s hackem '?'). Zustava "rcon": GetChat rozhoduje,
+        # co je globalni chat (tribe chat v logu byt muze a nesmi jit vsem ani
+        # na Discord), pismena s hackem doplni ChatRestorer z logu.
         "chat_source": "rcon",
     },
 }
@@ -155,6 +157,138 @@ def parse_chat(line, pattern=CHAT_RE):
     if not player or not message:
         return None
     return player, message
+
+
+def _degraded_forms(ch):
+    """Co muze z jednoho znaku logu (UTF-8) zbyt v odpovedi GetChat.
+
+    ASA na Windows vraci GetChat v kodove strance a pismeno, ktere v ni neni,
+    nahradi '?' (overeno 9. 10. 2026: 'čus' -> '?us'). Pismeno, ktere v ni je,
+    muze projit beze zmeny; U+FFFD je od dekoderu RCON. Zakladni pismeno
+    ("best-fit", č -> c) se nepripousti - videno nebylo a otevrelo by shodu
+    s jinou zpravou ('kde jsí?' x 'kde jsi?').
+    """
+    if ch.isascii():
+        return (ch,)
+    return ("?", "\ufffd", ch)
+
+
+def rcon_degraded(log_text, rcon_text):
+    """True, kdyz rcon_text muze byt log_text po pruchodu RCON (pismena mimo kodovou stranku -> '?')."""
+    expected = []
+    for ch in log_text:
+        forms = _degraded_forms(ch)
+        # Znak mimo BMP (emoji) je v UTF-16 par - z kazde poloviny vlastni '?'.
+        expected.extend([forms, forms] if ord(ch) > 0xFFFF else [forms])
+    return len(expected) == len(rcon_text) and all(c in f for c, f in zip(rcon_text, expected))
+
+
+def _same_player(log_name, rcon_name):
+    """Je rcon_name jmeno z logu po pruchodu RCON? parse_chat z nej uz odrizl
+    otazniky na krajich, tedy i pismena mimo kodovou stranku na zacatku a konci."""
+    if rcon_degraded(log_name, rcon_name):
+        return True
+    trimmed = log_name.strip()
+    while trimmed and not trimmed[0].isascii():
+        trimmed = trimmed[1:].lstrip()
+    while trimmed and not trimmed[-1].isascii():
+        trimmed = trimmed[:-1].rstrip()
+    return bool(trimmed) and trimmed != log_name and rcon_degraded(trimmed, rcon_name)
+
+
+class ChatRestorer:
+    """Vraci zpravam z GetChat ceska pismena z logu mapy.
+
+    GetChat dal rozhoduje, CO je globalni chat; log mapy (UTF-8) obsahuje i tribe
+    a lokalni chat, takze z nej se bere jen text a jen kdyz je to jiste:
+    - jen radek stejneho hrace z poslednich WINDOW sekund, kazdy nejvys jednou;
+    - radek se stejnym textem ma prednost (zprava s otaznikem napsanym rucne);
+    - kdyz tvaru odpovida vic ruznych textu (tribe 'ťus' a globalni 'čus'),
+      zustanou otazniky - radsi '?us' nez cizi zprava na Discordu;
+    - jediny kandidat se bere az po GRACE, kdyby radek globalni zpravy teprve
+      prichazel (vlakno logu cte po 0,5 s);
+    - radek, ktery prijde az po odeslani zpravy s otazniky, se zahodi, aby
+      nepripadl dalsi zprave stejneho tvaru.
+    """
+    WINDOW = 12.0       # GetChat se cte kazdych 5 s, radek logu byva o chvili drive
+    WAIT = 1.5          # rozpocet cekani na radek logu za jeden pruchod chat_loop
+    GRACE = 0.6         # vlakno logu spi 0,5 s
+
+    def __init__(self, clock=time.monotonic, sleep=time.sleep):
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._recent = collections.deque(maxlen=64)     # [cas, hrac, zprava, pouzity]
+        self._missed = collections.deque(maxlen=32)     # [cas, hrac, text z GetChat]
+        self.log_has_chat = False   # bez chatu v logu (napr. ASE) nema cekani smysl
+
+    def note(self, player, message):
+        """Vola vlakno logu mapy: radek chatu tak, jak je v logu (UTF-8)."""
+        # Ikona platformy u jmena (soukroma oblast Unicode) do Discordu nepatri.
+        player = "".join(c for c in player if unicodedata.category(c) not in ("Co", "Cn", "Cs")).strip() or player
+        now = self._clock()
+        with self._lock:
+            self.log_has_chat = True
+            entry = [now, player, message, False]
+            for miss in list(self._missed):
+                if now - miss[0] <= self.WINDOW and _same_player(player, miss[1]) and rcon_degraded(message, miss[2]):
+                    self._missed.remove(miss)
+                    entry[3] = True
+                    break
+            self._recent.append(entry)
+
+    def _lookup(self, player, message):
+        """('exact'|'one'|'many'|'none', zaznam) - nic nespotrebuje."""
+        now = self._clock()
+        with self._lock:
+            fresh = [e for e in self._recent
+                     if not e[3] and now - e[0] <= self.WINDOW and _same_player(e[1], player)]
+        exact = [e for e in fresh if e[2] == message]
+        if exact:
+            return "exact", exact[0]
+        hits = [e for e in fresh if rcon_degraded(e[2], message)]
+        if not hits:
+            return "none", None
+        return ("one", hits[0]) if len({e[2] for e in hits}) == 1 else ("many", None)
+
+    def _consume(self, entry):
+        with self._lock:
+            if entry[3]:
+                return None
+            entry[3] = True
+        return entry[1], entry[2]
+
+    def restore(self, player, message, degraded=True, wait=None):
+        """(hrac, zprava) s pismeny z logu, nebo puvodni dvojice.
+
+        degraded: radek z GetChat obsahoval '?' nebo U+FFFD (i ten, ktery parse_chat
+        odrizl z kraje jmena); bez nej neni co vracet. wait: kolik smi cekat.
+        """
+        if not degraded:
+            return player, message
+        wait = self.WAIT if wait is None else max(0.0, wait)
+        if not self.log_has_chat:
+            wait = 0.0
+        deadline = self._clock() + wait
+        candidate = None
+        while True:
+            kind, entry = self._lookup(player, message)
+            if kind == "exact":
+                return self._consume(entry) or (player, message)
+            if kind == "many":
+                return player, message
+            if kind == "one":
+                if candidate is entry and self._clock() - since >= self.GRACE:
+                    return self._consume(entry) or (player, message)
+                if candidate is not entry:
+                    candidate, since = entry, self._clock()
+            if self._clock() >= deadline and kind != "one":
+                with self._lock:
+                    self._missed.append([self._clock(), player, message])
+                return player, message
+            if self._clock() >= deadline + self.GRACE:
+                return player, message
+            self._sleep(0.2)
 
 
 _print_lock = threading.Lock()
@@ -770,6 +904,9 @@ class MapServer:
         self.players = {}
         # Pri chat_source "log" sem _tail_log predava (mapa, hrac, zprava).
         self.chat_sink = None
+        # Radky chatu z logu (UTF-8) - pri chat_source "rcon" z nich chat_loop
+        # vraci ceska pismena, ktera GetChat nahradil '?'. Viz ChatRestorer.
+        self.chat_restorer = ChatRestorer()
         self._reader = None
         # Windows: job object mapy (KILL_ON_JOB_CLOSE + pinning), viz winapi.
         self._job = None
@@ -1036,6 +1173,10 @@ class MapServer:
                     continue
                 chat = parse_chat(text, LOG_CHAT_RE)
                 if chat:
+                    try:
+                        self.chat_restorer.note(*chat)
+                    except Exception:           # nesmi zastavit cteni logu
+                        pass
                     # Do konzole ho vypise relay jako "<hrac> zprava" - surovy
                     # radek by tam byl podruhe.
                     if self.chat_sink:
@@ -1555,6 +1696,8 @@ class Supervisor:
                 self._relay(origin, player, message)
             return
         while not self.stopping.wait(5):
+            # Rozpocet cekani na radky logu (ChatRestorer) na cely pruchod pres mapy.
+            budget_end = time.monotonic() + ChatRestorer.WAIT
             for server in self.maps.values():
                 if not server.running or not server.probe_ready():
                     continue
@@ -1572,6 +1715,14 @@ class Supervisor:
                         continue
                     chat_line = parse_chat(line)
                     if chat_line:
+                        # GetChat urcuje, co je globalni chat; pismena s hackem
+                        # (v kodove strance '?') se vezmou z logu mapy.
+                        try:
+                            chat_line = server.chat_restorer.restore(
+                                *chat_line, degraded="?" in line or "\ufffd" in line,
+                                wait=budget_end - time.monotonic())
+                        except Exception as exc:    # oprava pismen nesmi zastavit chat
+                            log(f"chat: pismena z logu nejdou doplnit ({exc!r})")
                         self._relay(server, *chat_line)
 
     def _relay(self, origin, player, message):
