@@ -80,8 +80,9 @@ class DegradedTest(unittest.TestCase):
 NEG = float("-inf")
 
 
-def ask(r, c, player, msg, since=NEG, eof=True, wait=1.5, degraded=True):
-    """Jako chat_loop: odpoved GetChat prisla ted, vlakno logu (eof=True) hned docte soubor."""
+def ask(r, c, player, msg, since=None, eof=True, wait=1.5, degraded=True):
+    """Jako chat_loop: predchozi otazka pred 10 s, odpoved prisla ted, vlakno logu (eof=True) hned docte soubor."""
+    since = c() - 10 if since is None else since
     replied = c()
     c.t += 0.01
     if eof:
@@ -123,7 +124,7 @@ class RestorerTest(unittest.TestCase):
                 r.note("DeNNy", "čus")      # vlakno logu docte radek ...
                 r.mark_eof()                # ... a dojde na konec souboru
         r._sleep = sleep
-        self.assertEqual(r.restore("DeNNy", "?us", since=NEG, replied=replied), ("DeNNy", "čus"))
+        self.assertEqual(r.restore("DeNNy", "?us", since=c() - 10, replied=replied), ("DeNNy", "čus"))
 
     def test_log_not_read_in_time_fails_closed(self):
         c = Clock()
@@ -213,6 +214,17 @@ class RestorerTest(unittest.TestCase):
             c.t += 0.1
             r.note("Bara", f"spam {i}")         # tribe spam vytlaci globalni radek
         self.assertEqual(ask(r, c, "Anna", "?us"), ("Anna", "?us"))
+
+    def test_interval_not_fully_in_memory_fails_closed(self):
+        # Review 9. 10. (3. kolo): mapa dlouho bez GetChat - globalni radek vypadl z WINDOW.
+        c = Clock(1000)
+        r = restorer(c)
+        r.note("Anna", "ťus")       # globalni, starsi nez WINDOW
+        c.t = 1150
+        r.note("Anna", "čus")       # tribe
+        c.t = 1160
+        self.assertEqual(ask(r, c, "Anna", "?us", since=900), ("Anna", "?us"))
+        self.assertEqual(ask(r, c, "Anna", "?us", since=NEG), ("Anna", "?us"))   # prvni otazka po startu
 
     def test_name_with_diacritics(self):
         c = Clock()

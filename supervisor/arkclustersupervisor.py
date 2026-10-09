@@ -271,6 +271,10 @@ class ChatRestorer:
                 self._sleep(0.05)
         now = self._clock()
         with self._lock:
+            # Interval od minule otazky musi byt cely v pameti: prvni otazka po startu
+            # (since=-inf) nebo mapa dlouho bez GetChat = radek mohl vypadnout z WINDOW.
+            if since < now - self.WINDOW:
+                return player, message
             if self._evicted is not None and self._evicted >= since:   # vytlaceny radek mohl byt ten globalni
                 return player, message
             fresh = [e for e in self._recent if not e[3] and e[0] >= since and now - e[0] <= self.WINDOW
@@ -1149,7 +1153,8 @@ class MapServer:
                         continue
                 chunk = handle.readline()
                 if not chunk:
-                    self.chat_restorer.mark_eof()
+                    if not partial:             # rozepsany radek = jeste neni doctene
+                        self.chat_restorer.mark_eof()
                     if not alive:
                         return          # proces skoncil a zbytek je doctene
                     try:
