@@ -201,26 +201,33 @@ class ChatRestorer:
 
     GetChat dal rozhoduje, CO je globalni chat; log mapy (UTF-8) obsahuje i tribe
     a lokalni chat, takze z nej se bere jen text a jen kdyz je to jiste:
-    - jen radek stejneho hrace z poslednich WINDOW sekund, kazdy nejvys jednou;
-    - radek se stejnym textem ma prednost (zprava s otaznikem napsanym rucne);
-    - kdyz tvaru odpovida vic ruznych textu (tribe 'ťus' a globalni 'čus'),
-      zustanou otazniky - radsi '?us' nez cizi zprava na Discordu;
-    - jediny kandidat se bere az po GRACE, kdyby radek globalni zpravy teprve
-      prichazel (vlakno logu cte po 0,5 s);
-    - radek, ktery prijde az po odeslani zpravy s otazniky, se zahodi, aby
-      nepripadl dalsi zprave stejneho tvaru.
+    - kandidat je jen radek precteny od predchozi otazky GetChat na teze mape
+      (zprava z odpovedi byla odeslana az po ni) a jeste nepouzity;
+    - nejdriv se pocka, az vlakno logu docte soubor do konce po odpovedi GetChat -
+      pak v kandidatech urcite je i radek globalni zpravy; kdyz to nestihne
+      v rozpoctu, zustanou otazniky;
+    - vsichni kandidati musi mit v logu jedno jmeno ('Čech' i 'Ťech' prijdou
+      z GetChat jako 'ech') a jeden text stejneho tvaru (tribe 'ťus' x globalni
+      'čus'), jinak zustanou otazniky - radsi '?us' nez cizi zprava na Discordu;
+    - radek se stejnym textem ma prednost (rucne napsany otaznik);
+    - pozdni radek uz odeslane zpravy se zahodi, aby nepripadl dalsi zprave.
     """
-    WINDOW = 12.0       # GetChat se cte kazdych 5 s, radek logu byva o chvili drive
-    WAIT = 1.5          # rozpocet cekani na radek logu za jeden pruchod chat_loop
-    GRACE = 0.6         # vlakno logu spi 0,5 s
+    WAIT = 1.5          # rozpocet cekani na dočteni logu za jeden pruchod chat_loop
+    WINDOW = 120.0      # strop stari kandidata (mapa dlouho bez GetChat)
 
-    def __init__(self, clock=time.monotonic, sleep=time.sleep):
+    def __init__(self, clock=time.monotonic, sleep=time.sleep, maxlen=256):
         self._clock = clock
         self._sleep = sleep
         self._lock = threading.Lock()
-        self._recent = collections.deque(maxlen=64)     # [cas, hrac, zprava, pouzity]
-        self._missed = collections.deque(maxlen=32)     # [cas, hrac, text z GetChat]
-        self.log_has_chat = False   # bez chatu v logu (napr. ASE) nema cekani smysl
+        self._recent = collections.deque(maxlen=maxlen)  # [cas, hrac, zprava, pouzity]
+        self._missed = collections.deque(maxlen=32)      # [cas, hrac, text z GetChat]
+        self._evicted = None             # cas posledniho radku vytlaceneho z _recent
+        self.last_eof = float("-inf")    # kdy vlakno logu naposled docetlo soubor
+        self.log_has_chat = False        # bez chatu v logu (napr. ASE) nema cekani smysl
+
+    def mark_eof(self):
+        """Vola vlakno logu, kdyz docte soubor do konce."""
+        self.last_eof = self._clock()
 
     def note(self, player, message):
         """Vola vlakno logu mapy: radek chatu tak, jak je v logu (UTF-8)."""
@@ -235,60 +242,49 @@ class ChatRestorer:
                     self._missed.remove(miss)
                     entry[3] = True
                     break
+            if len(self._recent) == self._recent.maxlen:
+                self._evicted = self._recent[0][0]
             self._recent.append(entry)
 
-    def _lookup(self, player, message):
-        """('exact'|'one'|'many'|'none', zaznam) - nic nespotrebuje."""
-        now = self._clock()
+    def _miss(self, player, message):
         with self._lock:
-            fresh = [e for e in self._recent
-                     if not e[3] and now - e[0] <= self.WINDOW and _same_player(e[1], player)]
-        exact = [e for e in fresh if e[2] == message]
-        if exact:
-            return "exact", exact[0]
-        hits = [e for e in fresh if rcon_degraded(e[2], message)]
-        if not hits:
-            return "none", None
-        return ("one", hits[0]) if len({e[2] for e in hits}) == 1 else ("many", None)
+            self._missed.append([self._clock(), player, message])
+        return player, message
 
-    def _consume(self, entry):
-        with self._lock:
-            if entry[3]:
-                return None
-            entry[3] = True
-        return entry[1], entry[2]
-
-    def restore(self, player, message, degraded=True, wait=None):
+    def restore(self, player, message, degraded=True, since=float("-inf"), replied=None, wait=None):
         """(hrac, zprava) s pismeny z logu, nebo puvodni dvojice.
 
         degraded: radek z GetChat obsahoval '?' nebo U+FFFD (i ten, ktery parse_chat
-        odrizl z kraje jmena); bez nej neni co vracet. wait: kolik smi cekat.
+        odrizl z kraje jmena). since: kdy se tahle mapa naposledy ptala GetChat.
+        replied: kdy prisla tahle odpoved (None = bez cekani, jen testy).
+        wait: kolik smi cekat na docteni logu.
         """
         if not degraded:
             return player, message
-        wait = self.WAIT if wait is None else max(0.0, wait)
         if not self.log_has_chat:
-            wait = 0.0
-        deadline = self._clock() + wait
-        candidate = None
-        while True:
-            kind, entry = self._lookup(player, message)
-            if kind == "exact":
-                return self._consume(entry) or (player, message)
-            if kind == "many":
+            return self._miss(player, message)
+        if replied is not None:
+            deadline = self._clock() + max(0.0, self.WAIT if wait is None else wait)
+            while self.last_eof < replied:
+                if self._clock() >= deadline:
+                    return self._miss(player, message)
+                self._sleep(0.05)
+        now = self._clock()
+        with self._lock:
+            if self._evicted is not None and self._evicted >= since:   # vytlaceny radek mohl byt ten globalni
                 return player, message
-            if kind == "one":
-                if candidate is entry and self._clock() - since >= self.GRACE:
-                    return self._consume(entry) or (player, message)
-                if candidate is not entry:
-                    candidate, since = entry, self._clock()
-            if self._clock() >= deadline and kind != "one":
-                with self._lock:
-                    self._missed.append([self._clock(), player, message])
+            fresh = [e for e in self._recent if not e[3] and e[0] >= since and now - e[0] <= self.WINDOW
+                     and _same_player(e[1], player)]
+            exact = [e for e in fresh if e[2] == message]
+            hits = exact or [e for e in fresh if rcon_degraded(e[2], message)]
+            if not hits:
+                self._missed.append([now, player, message])
                 return player, message
-            if self._clock() >= deadline + self.GRACE:
+            names = {e[1] for e in fresh if e[2] == message or rcon_degraded(e[2], message)}
+            if len(names) > 1 or (not exact and len({e[2] for e in hits}) > 1):
                 return player, message
-            self._sleep(0.2)
+            hits[0][3] = True
+            return hits[0][1], hits[0][2]
 
 
 _print_lock = threading.Lock()
@@ -907,6 +903,8 @@ class MapServer:
         # Radky chatu z logu (UTF-8) - pri chat_source "rcon" z nich chat_loop
         # vraci ceska pismena, ktera GetChat nahradil '?'. Viz ChatRestorer.
         self.chat_restorer = ChatRestorer()
+        # Kdy se chat_loop naposledy ptal GetChat (time.monotonic) - viz ChatRestorer.
+        self.chat_asked = float("-inf")
         self._reader = None
         # Windows: job object mapy (KILL_ON_JOB_CLOSE + pinning), viz winapi.
         self._job = None
@@ -1151,6 +1149,7 @@ class MapServer:
                         continue
                 chunk = handle.readline()
                 if not chunk:
+                    self.chat_restorer.mark_eof()
                     if not alive:
                         return          # proces skoncil a zbytek je doctene
                     try:
@@ -1701,10 +1700,13 @@ class Supervisor:
             for server in self.maps.values():
                 if not server.running or not server.probe_ready():
                     continue
+                asked = time.monotonic()
                 try:
                     chat = server.rcon.command("GetChat")
                 except (RconError, OSError):
                     continue
+                replied, since = time.monotonic(), server.chat_asked
+                server.chat_asked = asked
                 for line in chat.splitlines():
                     line = line.strip()
                     # Vlastni preposlana zprava se vraci zpet v GetChat jako
@@ -1720,7 +1722,7 @@ class Supervisor:
                         try:
                             chat_line = server.chat_restorer.restore(
                                 *chat_line, degraded="?" in line or "\ufffd" in line,
-                                wait=budget_end - time.monotonic())
+                                since=since, replied=replied, wait=budget_end - time.monotonic())
                         except Exception as exc:    # oprava pismen nesmi zastavit chat
                             log(f"chat: pismena z logu nejdou doplnit ({exc!r})")
                         self._relay(server, *chat_line)
