@@ -142,6 +142,30 @@ clusteru a při každém restartu mapy (`restart`, `event apply`) a zamyká na
 **Pozor na směr:** intervalové hodnoty se **snižují**. Napsat u „4×" všude `4.0`
 by breeding čtyřnásobně *zpomalilo*.
 
+### Eventy od Wildcardu (ASA: Fear Ascended, Winter Wonderland…)
+
+Sváteční eventy jsou v ASA **mody z CurseForge** od Wildcardu (stejné ID každý rok,
+jen nový soubor). Pole *Event* v nastavení instance:
+
+| volba | co se stane |
+|---|---|
+| Vypnuto | nic |
+| Jako oficiální servery | event podle kalendáře v `supervisor/events.json` |
+| konkrétní event | ten event hned při příštím startu |
+
+Event se vybírá **při startu clusteru**, takže začátek i konec eventu vezme denní restart —
+supervisor nic sám nerestartuje. Mod eventu supervisor přidá do `-mods`, k Fear Ascended
+i `-HalloweenColors` (barvy divokých dinosaurů), k Anniversary `-ActiveEvent=Birthday`.
+
+**Po konci eventu se mod neodebírá.** Wildcard (patch 33.15) varuje, že odebrání modu může
+smazat předměty a skiny z eventu, a doporučuje `-passivemods` (logika vypnutá, data načtená,
+pasivní mod v `-mods` první). Supervisor si ve stavu pamatuje, které eventy už běžely
+(`events_seen`), a jejich mody drží pasivně dál.
+
+Kalendář v `events.json` je **odhad podle minulých let** (`confirmed: false`) — Wildcard
+oznamuje data v Community Crunch na Steamu jen 3–5 dní předem a eventy často prodlužuje.
+Po oznámení přepiš data a dej `confirmed: true`. Sekce `history` je podklad pro odhady.
+
 ## Konfigurace
 
 Konfigurace je generovaná — needituj ji v instanci, přepíše se. Uprav místo toho:

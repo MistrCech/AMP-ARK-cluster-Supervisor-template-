@@ -391,6 +391,30 @@
         }
     },
     {
+        "DisplayName": "Event",
+        "Category": "ARK Cluster:hub",
+        "Subcategory": "Events:date_range:4",
+        "Description": "Event od Wildcardu (mod z CurseForge). 'Jako oficialni servery' zapina eventy podle kalendare v supervisor/events.json. Projevi se pri PRISTIM startu clusteru (denni restart). Po konci eventu zustane jeho mod nacteny jako pasivni, aby hraci neprisli o predmety z eventu.",
+        "Keywords": "event,fear,halloween,winter,christmas,mod",
+        "FieldName": "Event",
+        "InputType": "enum",
+        "IsFlagArgument": false,
+        "ParamFieldName": "Event",
+        "IncludeInCommandLine": false,
+        "DefaultValue": "off",
+        "EnumValues": {
+            "off": "Vypnuto",
+            "official": "Jako oficialni servery (kalendar)",
+            "fear": "Fear Ascended (Halloween)",
+            "turkey": "Turkey Trial",
+            "winter": "Winter Wonderland",
+            "love": "Love Ascended",
+            "easter": "Eggcellent Adventure",
+            "anniversary": "ARK Anniversary",
+            "summer": "Summer Bash"
+        }
+    },
+    {
         "DisplayName": "Rate Preset",
         "Category": "ARK Cluster:hub",
         "Subcategory": "Events:date_range:4",

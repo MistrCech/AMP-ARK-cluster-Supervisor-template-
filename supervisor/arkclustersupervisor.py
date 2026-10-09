@@ -10,6 +10,7 @@ Prikazy prijima na stdin - tim je konzole AMP zaroven ovladacim panelem.
 """
 import collections
 import configparser
+import datetime
 import json
 import os
 import queue
@@ -79,6 +80,8 @@ GAMES = {
         "started_re": r"^Server has completed startup and is now advertising for join",
         # ASA na prazdny paket neodpovi a spojeni pak mlci uplne - viz rcon.py.
         "rcon_terminator": False,
+        # Eventy od Wildcardu jako mody z CurseForge - viz events.json, plan_event.
+        "events": True,
         # ASA pise chat i do logu, v UTF-8 - GetChat vraci kodovou stranku
         # systemu (z c, r, e s hackem '?'). Zustava "rcon": GetChat rozhoduje,
         # co je globalni chat (tribe chat v logu byt muze a nesmi jit vsem ani
@@ -363,6 +366,11 @@ class Config:
         self.discord_channel = env("ARK_DISCORD_CHANNEL")
         self.discord_to_game = env_bool("ARK_DISCORD_TO_GAME")
         self.rate_preset = env("ARK_RATE_PRESET") or "normal"
+        # Event (mod od Wildcardu): "off", "official" = podle kalendare v events.json,
+        # nebo klic eventu - viz resolve_event.
+        self.event = env("ARK_EVENT") or "off"
+        self.passive_mods = []      # doplni main() podle plan_event
+        self.event_args = []
         self.custom_options = env("ARK_CUSTOM_OPTIONS")
         # Mody - cisla projektu z CurseForge (ASA) / Steam Workshopu (ASE).
         self.mods = [m for m in re.split(r"[\s,;]+", env("ARK_MODS")) if m]
@@ -629,6 +637,62 @@ def load_json(path, fallback):
     except (OSError, ValueError) as exc:
         log(f"VAROVANI: {path.name} nelze precist ({exc}), pouzivam vychozi")
         return fallback
+
+
+def resolve_event(choice, events, today, game=None):
+    """Ktery event ma cluster dnes bezet -> (klic, zaznam) nebo (None, duvod).
+
+    choice: "off", "official" (kalendar z events.json, jako oficialni servery)
+    nebo klic eventu (rucni volba). events: obsah events.json. today: datetime.date.
+    Event se vybira pri startu clusteru, takze zacatek i konec eventu vezme
+    nejblizsi restart (denni restart v AMP) - bez vlastniho planovani restartu.
+    """
+    game = game or GAME
+    defs = (events.get("events") or {}).get(game) or {}
+    choice = (choice or "off").strip().lower()
+    if choice in ("", "off", "none"):
+        return None, "vypnuto"
+    if choice == "official":
+        iso = today.isoformat()
+        hits = [c for c in events.get("calendar") or []
+                if c.get("game", game) == game and c.get("start", "9999") <= iso <= c.get("end", "")]
+        if not hits:
+            return None, "podle kalendare dnes zadny event"
+        choice = hits[0]["event"]
+    entry = defs.get(choice)
+    if not entry:
+        return None, f"neznamy event '{choice}' (events.json zna: {', '.join(sorted(defs)) or 'nic'})"
+    if not _event_mod_ids(entry) and not entry.get("args"):
+        return None, f"event '{choice}' nema v events.json mod ani prepinac"
+    return choice, entry
+
+
+def _event_mod_ids(entry):
+    return [str(m) for m in entry.get("mods", []) if str(m).isdigit()]
+
+
+def plan_event(choice, events, today, seen, mods, game=None):
+    """Co pridat na prikazovou radku kvuli eventum.
+
+    Mod eventu, ktery uz nekdy bezel, se po konci eventu neodebira: Wildcard
+    (patch 33.15) varuje, ze odebranim modu muzou zmizet predmety a skiny
+    z eventu. Misto toho zustane v -mods a pribude do -passivemods (logika
+    vypnuta, data nactena) - pasivni mod ma byt v -mods PRVNI.
+    Vraci dict: mods (cele -mods), passive, args, active (klic|None), detail, seen.
+    """
+    game = game or GAME
+    defs = (events.get("events") or {}).get(game) or {}
+    key, detail = resolve_event(choice, events, today, game)
+    active = _event_mod_ids(detail) if key else []
+    seen = list(dict.fromkeys(list(seen) + ([key] if key else [])))
+    passive = []
+    for old in seen:
+        if old != key:
+            passive += [m for m in _event_mod_ids(defs.get(old) or {}) if m not in active and m not in passive]
+    out = passive + [m for m in list(mods) + active if m not in passive]
+    out = list(dict.fromkeys(out))
+    args = [a for a in (detail.get("args") or []) if a.startswith("-") and '"' not in a] if key else []
+    return {"mods": out, "passive": passive, "args": args, "active": key, "detail": detail, "seen": seen}
 
 
 class State:
@@ -1006,6 +1070,9 @@ class MapServer:
             if self.cfg.mods:
                 # Mody z CurseForge si server stahne sam pri startu.
                 args.append("-mods=" + ",".join(self.cfg.mods))
+            if self.cfg.passive_mods:
+                args.append("-passivemods=" + ",".join(self.cfg.passive_mods))
+            args += self.cfg.event_args
         else:
             args += ["-AutoManagedMods", "-Crossplay", "-server"]
         for extra in self.cfg.custom_args.split():
@@ -2180,6 +2247,21 @@ def main():
     # Kanonicke poradi, ne poradi argumentu - porty musi sedet s ports.json.
     selected.sort(key=CANONICAL_MAPS.index)
     supervisor = Supervisor(cfg, selected)
+    if PROFILE.get("events"):
+        plan = plan_event(cfg.event, load_json(HERE / "events.json", {}), datetime.date.today(),
+                          supervisor.state.data.get("events_seen", []), cfg.mods)
+        cfg.mods, cfg.passive_mods, cfg.event_args = plan["mods"], plan["passive"], plan["args"]
+        if plan["seen"] != supervisor.state.data.get("events_seen", []):
+            supervisor.state.data["events_seen"] = plan["seen"]
+            supervisor.state.save()
+        if plan["active"]:
+            d = plan["detail"]
+            log(f"Event: {d.get('name', plan['active'])} "
+                f"(mody {', '.join(_event_mod_ids(d)) or '-'}, prepinace {' '.join(plan['args']) or '-'})")
+        elif cfg.event.lower() not in ("", "off", "none"):
+            log(f"Event: {plan['detail']}")
+        if plan["passive"]:
+            log(f"Pasivni mody po eventech (kvuli predmetum z eventu): {', '.join(plan['passive'])}")
 
     # Obsluha signalu smi udelat JEN set(). Puvodne tady bezel cely vypinaci
     # zebrik - kdyz signal prisel ve chvili, kdy preruseny thread drzel

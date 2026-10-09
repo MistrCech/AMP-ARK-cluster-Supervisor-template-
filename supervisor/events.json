@@ -1,0 +1,57 @@
+{
+  "_comment": [
+    "Eventy od Studio Wildcard pro pole 'Event' v nastaveni instance (ASA).",
+    "Event = mod z CurseForge (stejne ID kazdy rok, Wildcard jen nahraje novy soubor) a/nebo prepinace.",
+    "",
+    "'calendar' pouziva volba 'Jako oficialni servery': event bezi od 'start' do 'end' vcetne (datum,",
+    "supervisor ho vybira pri startu - zmenu tedy vezme nejblizsi denni restart).",
+    "confirmed=false je ODHAD podle minulych let; po oznameni Wildcardu (Community Crunch na Steamu,",
+    "obvykle 3-5 dni predem) prepsat data a dat confirmed=true. Prodlouzeni byvaji casta.",
+    "'history' je jen podklad pro odhady, supervisor ji nepouziva.",
+    "",
+    "Po konci eventu se mod NEodebira, ale zustane jako -passivemods (Wildcard, patch 33.15:",
+    "odebrani modu muze smazat predmety a skiny z eventu). Viz plan_event v arkclustersupervisor.py.",
+    "Zdroje: Steam news app 2399830 (Community Crunch, 'is live!' prispevky), CurseForge StudioWildcardMods."
+  ],
+  "events": {
+    "asa": {
+      "fear":        {"name": "Fear Ascended",        "mods": ["877752"], "args": ["-HalloweenColors"]},
+      "turkey":      {"name": "Turkey Trial",         "mods": ["927083"]},
+      "winter":      {"name": "Winter Wonderland",    "mods": ["927090"]},
+      "love":        {"name": "Love Ascended",        "mods": ["927084"]},
+      "easter":      {"name": "Eggcellent Adventure", "mods": ["877745"]},
+      "anniversary": {"name": "ARK Anniversary",      "mods": [], "args": ["-ActiveEvent=Birthday"]},
+      "summer":      {"name": "Summer Bash",          "mods": ["927091"]}
+    }
+  },
+  "calendar": [
+    {"event": "fear",        "start": "2026-10-28", "end": "2026-11-11", "confirmed": false, "note": "2024 i 2025 ve stredu kolem 29. 10.; 28. 10. jde zive UE 5.8 (CC 525) - muze se posunout"},
+    {"event": "turkey",      "start": "2026-11-24", "end": "2026-12-08", "confirmed": false, "note": "2024: 26. 11.-10. 12., 2025: 25. 11.-8. 12."},
+    {"event": "winter",      "start": "2026-12-18", "end": "2027-01-05", "confirmed": false, "note": "2024: 23. 12.-9. 1., 2025: 19. 12.-5. 1."},
+    {"event": "love",        "start": "2027-02-11", "end": "2027-02-18", "confirmed": false, "note": "kolem Valentyna; 2024 a 2025 prodlouzeno"},
+    {"event": "easter",      "start": "2027-03-24", "end": "2027-04-07", "confirmed": false, "note": "od Velikonoc -4/5 dni do +9/10 dni; Velikonoce 2027 = 28. 3."},
+    {"event": "anniversary", "start": "2027-06-01", "end": "2027-06-15", "confirmed": false, "note": "2025: 5.-17. 6., 2026: 2.-18. 6."},
+    {"event": "summer",      "start": "2027-07-01", "end": "2027-07-15", "confirmed": false, "note": "2024 a 2025 zacatkem cervence, 2026 az 17. 7."}
+  ],
+  "history": [
+    {"event": "turkey",      "start": "2023-12-08", "end": "2023-12-18"},
+    {"event": "winter",      "start": "2023-12-21", "end": "2024-01-07"},
+    {"event": "love",        "start": "2024-02-13", "end": "2024-02-26", "note": "prodlouzeno z 20. 2."},
+    {"event": "easter",      "start": "2024-03-29", "end": "2024-04-15", "note": "jen vyssi rates a barvy, bez modu"},
+    {"event": "summer",      "start": "2024-07-03", "end": "2024-07-17"},
+    {"event": "fear",        "start": "2024-10-30", "end": "2024-11-13"},
+    {"event": "turkey",      "start": "2024-11-26", "end": "2024-12-10", "note": "jen rates a barvy, bez modu"},
+    {"event": "winter",      "start": "2024-12-23", "end": "2025-01-09"},
+    {"event": "love",        "start": "2025-02-13", "end": "2025-02-24", "note": "prodlouzeno"},
+    {"event": "easter",      "start": "2025-04-16", "end": "2025-04-30"},
+    {"event": "anniversary", "start": "2025-06-05", "end": "2025-06-17"},
+    {"event": "summer",      "start": "2025-07-02", "end": "2025-07-17", "note": "prodlouzeno z 16. 7."},
+    {"event": "fear",        "start": "2025-10-29", "end": "2025-11-12"},
+    {"event": "turkey",      "start": "2025-11-25", "end": "2025-12-08"},
+    {"event": "winter",      "start": "2025-12-19", "end": "2026-01-05"},
+    {"event": "love",        "start": "2026-02-12", "end": "2026-02-19"},
+    {"event": "easter",      "start": "2026-03-31", "end": "2026-04-21", "note": "prodlouzeno ze 14. 4."},
+    {"event": "anniversary", "start": "2026-06-02", "end": "2026-06-18", "note": "prodlouzeno z 16. 6."},
+    {"event": "summer",      "start": "2026-07-17", "end": "2026-08-05"}
+  ]
+}
